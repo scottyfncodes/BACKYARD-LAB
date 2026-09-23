@@ -131,3 +131,62 @@ describe('THE BALL: different solutions all work', () => {
     expect(s.bonuses.find((b: any) => b.def.id === 'stayed_home').earned).toBe(false);
   });
 });
+
+describe('THE KITE is solvable', () => {
+  it('THROW: the kid chucks a wad of duct tape at the kite and knocks it loose', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.kite_in_tree, junk: false });
+    const tape = sim.spawnItem({ part: 'duct_tape', pos: [9.2, 0.1, 7.3] });
+    sim.teleportPlayer([9.2, 0, 7.8], 0);
+    sim.run(0.3);
+    expect(sim.pickUp(tape).ok).toBe(true);
+    const kite = sim.itemByTag('target')!;
+    const aim = () => {
+      const to = toV(kite.rb.translation()).sub(sim.eye());
+      return { ...emptyInput(), yaw: Math.atan2(-to.x, -to.z), pitch: Math.atan2(to.y, Math.hypot(to.x, to.z)) + 0.1 };
+    };
+    for (let i = 0; i < 40; i++) sim.step(aim());
+    sim.drop(8.5);
+    const ok = runUntil(sim, 12, emptyInput, () => !!successOf(sim));
+    expect(sim.drainEvents().some((e) => e.type === 'unsnag')).toBe(true);
+    expect(ok).toBe(true);
+  });
+});
+
+describe('THE KITE, machine version', () => {
+  it('BLOW: a box fan lying on its back under the kite blows it off the branch', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.kite_in_tree });
+    const b = new Builder('updraft');
+    const crate = b.free('crate');
+    // Fan on its back on top of a crate, blowing straight up; battery beside it.
+    b.on('box_fan', 'back', crate, [0, 0.2, 0], [0, 1, 0]);
+    b.on('battery_small', 'side', crate, [0, 0, 0.25], [0, 0, 1]);
+    const m = place(sim, b.bp, 8.3, 7.9, 0);
+    sim.run(1.2);
+    sim.goAll();
+    const kite = sim.itemByTag('target')!;
+    expect(runUntil(sim, 10, emptyInput, () => !kite.snag)).toBe(true);
+    // It works so well the kite floats in the updraft. Switch the fan off (reset) and it drops.
+    sim.run(1);
+    expect(toV(kite.rb.translation()).y).toBeGreaterThan(3);
+    sim.resetMachine(m.id);
+    const ok = runUntil(sim, 20, emptyInput, () => !!successOf(sim));
+    expect(ok).toBe(true);
+    const s = successOf(sim) as any;
+    expect(s.bonuses.find((x: any) => x.def.id === 'hands_off').earned).toBe(true);
+  });
+});
+
+describe("BISCUIT'S BALL is solvable", () => {
+  it('SUCK: a vacuum aimed under the shed pulls the tennis ball out', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.dog_ball });
+    const b = new Builder('vac');
+    const bat = b.free('battery_car');
+    b.on('vacuum', 'back', bat, [0, 0.08, 0.09], [0, 0, 1]);
+    // Nozzle faces machine +z; yaw -90deg points it at -x (under the shed).
+    place(sim, b.bp, -6.55, 11.1, -Math.PI / 2);
+    sim.run(0.3);
+    sim.goAll();
+    const ok = runUntil(sim, 20, emptyInput, () => !!successOf(sim));
+    expect(ok).toBe(true);
+  });
+});

@@ -98,8 +98,8 @@ export const PROJECTS: ProjectDef[] = [
     title: 'THE KITE',
     pitch: ['Your kite is stuck in the big tree.', 'Get it down.'],
     stage: 1,
-    props: [{ part: 'kite', pos: [7.6, 3.62, 7.25], rot: [8, 30, 0], tag: 'target' }],
-    snags: [{ tag: 'target', anchor: [7.6, 3.62, 7.25], breakForce: 14 }],
+    props: [{ part: 'kite', pos: [8.05, 2.93, 7.66], rot: [90, 0, 35], tag: 'target' }],
+    snags: [{ tag: 'target', anchor: [8.05, 3.35, 7.66], breakForce: 12 }],
     gateLocked: true,
     success: {
       type: 'any',
@@ -122,14 +122,14 @@ export const PROJECTS: ProjectDef[] = [
       { id: 'quick', label: 'Under 5 minutes', kind: 'atEnd', cond: { type: 'timeUnder', seconds: 300 } },
     ],
     unlocks: [],
-    focus: [7.6, 3.6, 7.2],
+    focus: [8.1, 3.1, 7.7],
   },
   {
     id: 'dog_ball',
     title: "BISCUIT'S BALL",
     pitch: ["The dog's ball rolled under the shed.", 'Get it out.'],
     stage: 1,
-    props: [{ part: 'tennis_ball', pos: [-10.2, 0.034, 11.2], tag: 'target' }],
+    props: [{ part: 'tennis_ball', pos: [-9.3, 0.034, 11.2], tag: 'target' }],
     gateLocked: true,
     success: {
       type: 'any',

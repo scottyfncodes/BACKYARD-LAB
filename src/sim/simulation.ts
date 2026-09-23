@@ -472,7 +472,8 @@ export class Simulation implements MachineHost {
       const F = d.multiplyScalar(((dl - slack) / Math.max(dl, 1e-6)) * k).sub(v.multiplyScalar(criticalDamping(k, m, 0.9)));
       // Measure the pull ignoring the item's own weight.
       const pull = F.clone().add(new Vector3(0, -m * 9.81, 0)).length();
-      if (pull > s.breakForce) {
+      // Give snagged things a moment to settle before they can tear loose.
+      if (pull > s.breakForce && this.time > 1) {
         s.over += dt;
         if (s.over > 0.08) {
           it.snag = undefined;
