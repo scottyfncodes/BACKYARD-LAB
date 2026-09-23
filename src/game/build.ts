@@ -67,6 +67,7 @@ interface Holding {
   def: string;
   socket?: string;
   spin: number;
+  tilt: number;
   moving?: MoveState;
 }
 
@@ -305,12 +306,15 @@ export class BuildMode {
     const def = getPart(this.holding!.def);
     const step = (dx: number, dy: number) => () => this.nudge(dx, dy);
     const cell = (el: HTMLElement | null) => el ?? h('div');
-    const turnL = def.link ? null : holdBtn('↺', () => this.spin(-15), 'small');
-    const turnR = def.link ? null : holdBtn('↻', () => this.spin(15), 'small');
+    // Two rotation axes: spin (flat on the surface) and tilt (tip it up).
+    const turnL = def.link ? null : holdBtn('↺<small>spin</small>', () => this.spin(-15), 'small rot');
+    const turnR = def.link ? null : holdBtn('↻<small>spin</small>', () => this.spin(15), 'small rot');
+    const tiltF = def.link ? null : holdBtn('⤵<small>tilt</small>', () => this.tilt(-15), 'small rot');
+    const tiltB = def.link ? null : holdBtn('⤴<small>tilt</small>', () => this.tilt(15), 'small rot');
     this.dpad.replaceChildren(
       cell(turnL), holdBtn('▲', step(0, -1), 'small'), cell(turnR),
       holdBtn('◀', step(-1, 0), 'small'), h('div', { class: 'dpad-mid' }, '✥'), holdBtn('▶', step(1, 0), 'small'),
-      h('div'), holdBtn('▼', step(0, 1), 'small'), h('div'),
+      cell(tiltF), holdBtn('▼', step(0, 1), 'small'), cell(tiltB),
     );
     const bar: HTMLElement[] = [];
     const moving = !!this.holding!.moving;
@@ -470,7 +474,7 @@ export class BuildMode {
     this.select(null);
     const d = getPart(def);
     const settings = moving ? moving.parts.find((p) => p.uid === moving.uid)?.settings : undefined;
-    this.holding = { def, spin: settings?.spin ?? 0, socket: settings?.mount ?? d.sockets[0]?.id, moving };
+    this.holding = { def, spin: settings?.spin ?? 0, tilt: settings?.tilt ?? 0, socket: settings?.mount ?? d.sockets[0]?.id, moving };
     if (!d.link) {
       this.ghost = new THREE.Group();
       // The ghost carries everything attached to the part being moved.
@@ -515,7 +519,9 @@ export class BuildMode {
     if (moving) at = moving.oldRoot.p.clone();
     else if (this.bp.parts.length) {
       const b = blueprintBounds(this.bp);
-      at = new THREE.Vector3((b.min.x + b.max.x) / 2, b.max.y, (b.min.z + b.max.z) / 2);
+      // Aim at the middle of the last thing placed: always somewhere solid.
+      const last = this.bp.parts.filter((p) => !getPart(p.def).link).pop();
+      at = last ? partPose(last).p : new THREE.Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2);
     } else at = new THREE.Vector3(0, 0, 0);
     return this.toScreen(at);
   }
@@ -565,6 +571,14 @@ export class BuildMode {
   private spin(deg: number) {
     if (!this.holding) return;
     this.holding.spin = (((this.holding.spin + deg) % 360) + 360) % 360;
+    this.host.audio.play('ui');
+    this.previewCursor();
+  }
+
+  private tilt(deg: number) {
+    if (!this.holding) return;
+    const t = this.holding.tilt + deg;
+    this.holding.tilt = Math.max(-90, Math.min(90, t));
     this.host.audio.play('ui');
     this.previewCursor();
   }
@@ -632,7 +646,7 @@ export class BuildMode {
       const nq = dq.clone().multiply(pp.q);
       p.p = [np.x, np.y, np.z];
       p.q = [nq.x, nq.y, nq.z, nq.w];
-      if (p.uid === mv.uid) p.settings = { ...p.settings, mount: this.holding!.socket, spin: this.holding!.spin };
+      if (p.uid === mv.uid) p.settings = { ...p.settings, mount: this.holding!.socket, spin: this.holding!.spin, tilt: this.holding!.tilt };
     }
     for (const c of mv.connections) {
       const a = move(v3(c.anchor));
@@ -672,11 +686,11 @@ export class BuildMode {
     const hit = this.pick(x, y);
     if (!hit) return null;
     if (hit.uid !== null && !('link' in hit && hit.link)) {
-      return computeAttach(this.bp, h.def, h.socket, { part: hit.uid, point: hit.point, normal: hit.normal }, h.spin);
+      return computeAttach(this.bp, h.def, h.socket, { part: hit.uid, point: hit.point, normal: hit.normal }, h.spin, h.tilt);
     }
     const free = this.pick(x, y, false);
     if (!free) return null;
-    return placeFree(this.bp, h.def, free.point.x, free.point.z, h.spin, h.socket);
+    return placeFree(this.bp, h.def, free.point.x, free.point.z, h.spin, h.socket, h.tilt);
   }
 
   private preview(x: number, y: number) {
@@ -689,6 +703,8 @@ export class BuildMode {
     const pl = this.placementAt(x, y);
     if (!pl || !this.ghost) {
       if (this.ghost) this.ghost.visible = false;
+      this.lastValid = false;
+      this.setStatus('Aim it at the bench or the machine', 'bad');
       return;
     }
     this.ghost.visible = true;
@@ -704,8 +720,10 @@ export class BuildMode {
     else if (pl.conn) {
       const target = getPart(findPart(this.bp, pl.conn.target)!.def).name.toLowerCase();
       const how = { weld: 'Stick it to', axle: 'Spins freely on', hinge: 'Swings on', driven: 'Driven by', tether: 'Tie it to' }[pl.conn.kind];
-      this.setStatus(`${how} the ${target}`, 'good');
-    } else this.setStatus('Put it on the bench', 'good');
+      const tilt = this.holding.tilt;
+      const note = tilt && pl.conn.kind !== 'weld' ? ' (stays square on it)' : tilt ? ` · tilted ${tilt}°` : '';
+      this.setStatus(`${how} the ${target}${note}`, 'good');
+    } else this.setStatus(`Put it on the bench${this.holding.tilt ? ` · tilted ${this.holding.tilt}°` : ''}`, 'good');
   }
 
   private previewLink(x: number, y: number, def: PartDef) {
@@ -771,7 +789,7 @@ export class BuildMode {
     const pl = this.placementAt(x, y);
     if (!pl || !pl.valid) {
       this.host.audio.play('error');
-      if (pl?.reason) this.setStatus(pl.reason, 'bad');
+      this.setStatus(pl?.reason ?? 'Aim it at the bench or the machine first', 'bad');
       return;
     }
     if (this.holding.moving) {
@@ -783,7 +801,7 @@ export class BuildMode {
       this.clearHolding();
       return;
     }
-    const uid = commitPlacement(this.bp, pl, { mount: this.holding.socket, spin: this.holding.spin });
+    const uid = commitPlacement(this.bp, pl, { mount: this.holding.socket, spin: this.holding.spin, tilt: this.holding.tilt });
     this.host.stash.take(def.id);
     this.host.audio.play('attach');
     this.afterChange();
@@ -980,6 +998,8 @@ export class BuildMode {
       if (k === 'arrowright') this.nudge(1, 0);
       if (k === 'q') this.spin(-15);
       if (k === 'e') this.spin(15);
+      if (k === 'z') this.tilt(-15);
+      if (k === 'x') this.tilt(15);
       if (k === 'enter' || k === ' ') this.lockIn();
     }
     if (k === 'm' && this.selected !== null) this.startMove(this.selected);

@@ -155,3 +155,54 @@ describe('blueprint bookkeeping', () => {
     expect(parseBlueprint({ parts: [{ uid: 1, def: 'crate', p: [0, NaN, 0], q: [0, 0, 0, 1] }] })!.parts).toHaveLength(0);
   });
 });
+
+describe('two rotation axes: spin and tilt', () => {
+  it('tilting a plank on a crate tips it up and rests it on its edge, still stuck on', () => {
+    const b = new Builder();
+    const crate = b.free('crate');
+    const flat = computeAttach(b.bp, 'plank', 'flat', { part: crate, point: new Vector3(0, 0.4, 0), normal: new Vector3(0, 1, 0) }, 0, 0);
+    const tilted = computeAttach(b.bp, 'plank', 'flat', { part: crate, point: new Vector3(0, 0.4, 0), normal: new Vector3(0, 1, 0) }, 0, 30);
+    expect(tilted.valid).toBe(true);
+    expect(tilted.conn?.kind).toBe('weld');
+    // The plank's long axis now climbs at 30 degrees.
+    const along = new Vector3(1, 0, 0).applyQuaternion(tilted.pose.q);
+    expect(Math.abs(Math.asin(Math.abs(along.y)) * (180 / Math.PI) - 30)).toBeLessThan(0.5);
+    expect(tilted.pose.q.angleTo(flat.pose.q)).toBeGreaterThan(0.5);
+    // Nothing of it pokes down into the crate.
+    const low = obbBounds(partOBBs(getPart('plank'), tilted.pose)).min.y;
+    expect(low).toBeGreaterThan(0.399);
+  });
+
+  it('spin and tilt are independent axes', () => {
+    const b = new Builder();
+    const crate = b.free('crate');
+    const hit = { part: crate, point: new Vector3(0, 0.4, 0), normal: new Vector3(0, 1, 0) };
+    const a = computeAttach(b.bp, 'plank', 'flat', hit, 90, 20).pose.q;
+    const c = computeAttach(b.bp, 'plank', 'flat', hit, 0, 20).pose.q;
+    const d = computeAttach(b.bp, 'plank', 'flat', hit, 90, 0).pose.q;
+    expect(a.angleTo(c)).toBeGreaterThan(0.5);
+    expect(a.angleTo(d)).toBeGreaterThan(0.2);
+  });
+
+  it('a tilted part set loose on the bench sits on the bench, not in it', () => {
+    const bp = newBlueprint();
+    const pl = placeFree(bp, 'crate', 0, 0, 0, undefined, 45);
+    expect(pl.valid).toBe(true);
+    expect(obbBounds(partOBBs(getPart('crate'), pl.pose)).min.y).toBeCloseTo(0, 2);
+    const up = new Vector3(0, 1, 0).applyQuaternion(pl.pose.q);
+    expect(up.y).toBeCloseTo(Math.cos(Math.PI / 4), 2);
+  });
+
+  it('wheels on axles and things on motor shafts stay square even when tilt is asked for', () => {
+    const b = new Builder();
+    const crate = b.free('crate');
+    const m = b.on('motor', 'base', crate, [0, 0.2, 0], [0, 1, 0]);
+    const t = getPart('motor').targets![0];
+    const mp = b.pose(m);
+    const hit = { part: m, point: new Vector3(...t.pos).applyQuaternion(mp.q).add(mp.p), normal: new Vector3(...t.normal).applyQuaternion(mp.q) };
+    const square = computeAttach(b.bp, 'lawn_wheel', 'hub', hit, 0, 0);
+    const asked = computeAttach(b.bp, 'lawn_wheel', 'hub', hit, 0, 45);
+    expect(asked.conn?.kind).toBe('driven');
+    expect(asked.pose.q.angleTo(square.pose.q)).toBeLessThan(1e-6);
+  });
+});

@@ -510,3 +510,5 @@ body.building .thought::after { display: none; }
   .place-bar { bottom: calc(104px + var(--safe-b)); }
   .place-bar .btn.go { min-height: 48px; font-size: 16px; }
 }
+.dpad .btn.rot { display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; font-size: 20px; }
+.dpad .btn.rot small { font-size: 9px; font-weight: 900; letter-spacing: 0.04em; margin-top: 2px; opacity: 0.75; }

@@ -36,6 +36,7 @@ export interface PartSettings {
   /** How it was mounted, so moving it later starts from the same orientation. */
   mount?: string;
   spin?: number;
+  tilt?: number;
 }
 
 export interface BPConnection {
@@ -86,6 +87,29 @@ export interface AttachHit {
 }
 
 const GRID = 0.025;
+
+/**
+ * Tilt (second rotation axis): pitch the part about a line lying in the
+ * contact surface, then lift it so it rests on its lowest edge instead of
+ * sinking into what it sits on.
+ */
+function applyTilt(def: PartDef, q: Quaternion, p: Vector3, normal: Vector3, pivot: Vector3, spinDeg: number, tiltDeg: number): void {
+  if (!tiltDeg) return;
+  const ref = perpendicular(normal, new Vector3(0, 1, 0)).applyAxisAngle(normal, (spinDeg * Math.PI) / 180);
+  const axis = new Vector3().crossVectors(normal, ref).normalize();
+  const t = new Quaternion().setFromAxisAngle(axis, (tiltDeg * Math.PI) / 180);
+  p.sub(pivot).applyQuaternion(t).add(pivot);
+  q.premultiply(t);
+  // Push back out along the normal until nothing is below the surface.
+  let lowest = Infinity;
+  for (const o of partOBBs(def, { p, q })) {
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+      const c = o.c.clone().addScaledVector(o.axes[0], sx * o.h[0]).addScaledVector(o.axes[1], sy * o.h[1]).addScaledVector(o.axes[2], sz * o.h[2]);
+      lowest = Math.min(lowest, c.sub(pivot).dot(normal));
+    }
+  }
+  if (lowest < 0.002) p.addScaledVector(normal, 0.002 - lowest);
+}
 const ALLOWED_TARGET_PEN = 0.03;
 const ALLOWED_PEN = 0.012;
 
@@ -141,7 +165,7 @@ function checkOverlaps(bp: Blueprint, def: PartDef, at: Pose, target: number | n
 }
 
 /** Place a part loose on the bench (no attachment). */
-export function placeFree(bp: Blueprint, defId: string, x: number, z: number, spinDeg = 0, socketId?: string): Placement {
+export function placeFree(bp: Blueprint, defId: string, x: number, z: number, spinDeg = 0, socketId?: string, tiltDeg = 0): Placement {
   const def = getPart(defId);
   if (def.link) return { def: defId, pose: { p: new Vector3(x, 0, z), q: new Quaternion() }, valid: false, reason: 'Tie it between two things' };
   const socket = def.sockets.find((s) => s.id === socketId) ?? def.sockets[0];
@@ -150,6 +174,7 @@ export function placeFree(bp: Blueprint, defId: string, x: number, z: number, sp
     q = alignBasis(v3(socket.normal), socketUp(def, socket.id), new Vector3(0, -1, 0), new Vector3(0, 0, 1));
   }
   q.premultiply(new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), (spinDeg * Math.PI) / 180));
+  if (tiltDeg) applyTilt(def, q, new Vector3(), new Vector3(0, 1, 0), new Vector3(), spinDeg, tiltDeg);
   const b = obbBounds(partOBBs(def, { p: new Vector3(), q }));
   const p = new Vector3(x, -b.min.y + 0.001, z);
   const at = { p, q };
@@ -170,7 +195,7 @@ function snapToGrid(localPoint: Vector3, localNormal: Vector3): Vector3 {
  * Joint type falls out of the geometry: wheel hubs become axles, anything on
  * a motor shaft is driven, anything on a hinge leaf swings.
  */
-export function computeAttach(bp: Blueprint, defId: string, socketId: string | undefined, hit: AttachHit, spinDeg = 0): Placement {
+export function computeAttach(bp: Blueprint, defId: string, socketId: string | undefined, hit: AttachHit, spinDeg = 0, tiltDeg = 0): Placement {
   const def = getPart(defId);
   const fail = (reason: string): Placement => ({ def: defId, pose: { p: hit.point.clone(), q: new Quaternion() }, valid: false, reason });
   if (def.link) return fail('Tie it between two things');
@@ -211,6 +236,8 @@ export function computeAttach(bp: Blueprint, defId: string, socketId: string | u
   let q = alignBasis(v3(socket.normal), socketUp(def, socket.id), normal.clone().negate(), ref);
   q.premultiply(new Quaternion().setFromAxisAngle(normal, (spinDeg * Math.PI) / 180));
   const p = point.clone().add(normal.clone().multiplyScalar(0.002)).sub(v3(socket.pos).applyQuaternion(q));
+  // Parts on a special joint (shaft, hinge, axle) stay square to it.
+  if (!jointFromTarget && socket.joint !== 'axle' && socket.joint !== 'tether') applyTilt(def, q, p, normal, point, spinDeg, tiltDeg);
   const at: Pose = { p, q };
 
   let conn: Placement['conn'];
