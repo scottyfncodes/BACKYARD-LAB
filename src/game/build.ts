@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { getPart, PARTS, type PartDef } from '../data/parts';
 import {
   addLink,
+  clone,
   blueprintBounds,
   blueprintMass,
   commitPlacement,
@@ -53,10 +54,43 @@ export interface BuildHost {
   saveCreation(bp: Blueprint): void;
 }
 
+interface MoveState {
+  uid: number;
+  snapshot: Blueprint;
+  oldRoot: { p: THREE.Vector3; q: THREE.Quaternion };
+  parts: Blueprint['parts'];
+  connections: Blueprint['connections'];
+  links: Blueprint['links'];
+}
+
 interface Holding {
   def: string;
   socket?: string;
   spin: number;
+  moving?: MoveState;
+}
+
+/** A button that fires on press and keeps firing while held. */
+function holdBtn(label: string, fire: () => void, cls = ''): HTMLButtonElement {
+  const b = h('button', { class: `btn ${cls}` });
+  b.innerHTML = label;
+  let timer = 0;
+  let delay = 0;
+  const stop = () => {
+    clearTimeout(delay);
+    clearInterval(timer);
+    b.classList.remove('pressed');
+  };
+  b.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    b.classList.add('pressed');
+    fire();
+    delay = window.setTimeout(() => (timer = window.setInterval(fire, 60)), 260);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, stop);
+  b.addEventListener('click', (e) => e.stopPropagation());
+  return b;
 }
 
 const BENCH = { x: 0.72, z: 0.38 };
@@ -99,10 +133,16 @@ export class BuildMode {
   private tools!: HTMLElement;
   private stats!: HTMLElement;
   private topBtns!: HTMLElement;
-  private pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number }>();
+  private pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number; grab?: boolean }>();
   private pinch: { d: number; a: number } | null = null;
   private dragFromTray = false;
-  private hover: { x: number; y: number } | null = null;
+  /** Screen point the held part is aimed at (moved by d-pad, taps, drags, mouse). */
+  private cursor: { x: number; y: number } | null = null;
+  private cursorEl!: HTMLElement;
+  private dpad!: HTMLElement;
+  private placeBar!: HTMLElement;
+  private lastValid = false;
+  private hoverLift = new THREE.Vector3();
   private raycaster = new THREE.Raycaster();
   private listeners: [EventTarget, string, EventListener][] = [];
   private time = 0;
@@ -174,10 +214,13 @@ export class BuildMode {
     this.status = h('div', { class: 'build-status hidden' });
     this.panel = h('div', { class: 'build-panel hidden' });
     this.tools = h('div', { class: 'build-tools' });
-    for (const el of [this.tray, this.panel, this.tools]) {
+    this.dpad = h('div', { class: 'dpad hidden' });
+    this.placeBar = h('div', { class: 'place-bar hidden' });
+    this.cursorEl = h('div', { class: 'build-cursor hidden' });
+    for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar]) {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
-    this.root.append(top, this.tray, this.status, this.panel, this.tools);
+    this.root.append(top, this.tray, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.cursorEl);
     this.host.ui.appendChild(this.root);
   }
 
@@ -185,6 +228,16 @@ export class BuildMode {
     const bp = this.bp;
     const mass = blueprintMass(bp);
     const n = bp.parts.length;
+    const mv = this.holding?.moving;
+    if (mv) {
+      this.stats.innerHTML = `Moving: ${this.escape(getPart(this.holding!.def).name)}<small>${mv.parts.length > 1 ? `with ${mv.parts.length - 1} attached` : 'arrows to move, ✔ to drop'}</small>`;
+      this.renderTop();
+      this.renderTray();
+      this.renderTools();
+      this.renderPanel();
+      this.renderMarkers();
+      return;
+    }
     this.stats.innerHTML = n ? `${this.escape(nameMachine(bp))}<small>${n} part${n === 1 ? '' : 's'} · ${mass.toFixed(1)} kg</small>` : `The Bench<small>empty</small>`;
     this.renderTop();
     this.renderTray();
@@ -243,19 +296,32 @@ export class BuildMode {
   }
 
   private renderTools() {
-    const t: HTMLElement[] = [];
-    if (this.holding && !this.testing) {
-      const def = getPart(this.holding.def);
-      if (!def.link) {
-        t.push(btn('↻ Turn', () => this.spin(45), 'small'));
-        if (def.sockets.length > 1) {
-          const s = def.sockets.find((x) => x.id === this.holding!.socket) ?? def.sockets[0];
-          t.push(btn(`⇅ ${s.label}`, () => this.cycleSocket(), 'small'));
-        }
-      }
-      t.push(btn('✕ Put back', () => this.clearHolding(), 'small'));
+    this.tools.replaceChildren();
+    const holding = this.holding && !this.testing;
+    this.dpad.classList.toggle('hidden', !holding);
+    this.placeBar.classList.toggle('hidden', !holding);
+    this.cursorEl.classList.toggle('hidden', !holding);
+    if (!holding) return;
+    const def = getPart(this.holding!.def);
+    const step = (dx: number, dy: number) => () => this.nudge(dx, dy);
+    const cell = (el: HTMLElement | null) => el ?? h('div');
+    const turnL = def.link ? null : holdBtn('↺', () => this.spin(-15), 'small');
+    const turnR = def.link ? null : holdBtn('↻', () => this.spin(15), 'small');
+    this.dpad.replaceChildren(
+      cell(turnL), holdBtn('▲', step(0, -1), 'small'), cell(turnR),
+      holdBtn('◀', step(-1, 0), 'small'), h('div', { class: 'dpad-mid' }, '✥'), holdBtn('▶', step(1, 0), 'small'),
+      h('div'), holdBtn('▼', step(0, 1), 'small'), h('div'),
+    );
+    const bar: HTMLElement[] = [];
+    const moving = !!this.holding!.moving;
+    if (def.link) bar.push(btn(this.linkStart ? '✔ TIE HERE' : '✔ TIE END', () => this.lockIn(), 'go'));
+    else bar.push(btn('✔ PLACE', () => this.lockIn(), 'go'));
+    if (!def.link && def.sockets.length > 1) {
+      const sk = def.sockets.find((x) => x.id === this.holding!.socket) ?? def.sockets[0];
+      bar.push(btn(`⇅ ${sk.label}`, () => this.cycleSocket(), 'small'));
     }
-    this.tools.replaceChildren(...t);
+    bar.push(btn(moving ? '✕ Undo move' : '✕ Put back', () => this.clearHolding(), 'small'));
+    this.placeBar.replaceChildren(...bar);
   }
 
   private renderPanel() {
@@ -287,6 +353,7 @@ export class BuildMode {
       const next = opts[(opts.indexOf(cur) + 1) % opts.length] ?? cur;
       row.append(btn(`📏 ${cur} m`, () => this.setting(part.uid, { length: next }), 'small'));
     }
+    if (!def.link) row.append(btn('✥ Move', () => this.startMove(part.uid), 'small blue'));
     row.append(btn('🗑 Remove', () => this.remove(part.uid), 'small danger'));
     this.panel.replaceChildren(
       h('h3', {}, def.name),
@@ -394,39 +461,99 @@ export class BuildMode {
 
   // ------------------------------------------------------------------ holding / placing
 
-  private startHolding(def: string) {
-    if (!this.host.stash.infinite && this.host.stash.count(def) <= 0) {
+  private startHolding(def: string, moving?: MoveState, at?: { x: number; y: number }) {
+    if (!moving && !this.host.stash.infinite && this.host.stash.count(def) <= 0) {
       this.host.audio.play('error');
       return;
     }
     this.clearHolding(false);
     this.select(null);
     const d = getPart(def);
-    this.holding = { def, spin: 0, socket: d.sockets[0]?.id };
+    const settings = moving ? moving.parts.find((p) => p.uid === moving.uid)?.settings : undefined;
+    this.holding = { def, spin: settings?.spin ?? 0, socket: settings?.mount ?? d.sockets[0]?.id, moving };
     if (!d.link) {
-      this.ghost = partMesh(def);
-      const str = this.ghost.getObjectByName('string');
-      if (str) str.visible = false;
-      this.ghost.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (m.isMesh) {
-          m.material = M.basic(0x40ff80, 0.5);
-          m.castShadow = false;
+      this.ghost = new THREE.Group();
+      // The ghost carries everything attached to the part being moved.
+      const rootInv = moving ? { p: moving.oldRoot.p.clone(), q: moving.oldRoot.q.clone().invert() } : null;
+      const members = moving ? moving.parts.filter((p) => !getPart(p.def).link) : [{ uid: -1, def, p: [0, 0, 0], q: [0, 0, 0, 1] } as Blueprint['parts'][number]];
+      for (const m of members) {
+        const g = partMesh(m.def);
+        const str = g.getObjectByName('string');
+        if (str) str.visible = false;
+        if (rootInv) {
+          const pp = partPose(m);
+          g.position.copy(pp.p.sub(moving!.oldRoot.p).applyQuaternion(rootInv.q));
+          g.quaternion.copy(rootInv.q.clone().multiply(pp.q));
         }
-      });
+        this.ghost.add(g);
+      }
+      this.tintGhost(0x40ff80);
       this.ghost.visible = false;
       this.host.r.scene.add(this.ghost);
-      this.setStatus(this.bp.parts.length ? `Tap or drag onto the machine or the bench` : `Tap the bench to put it down`);
-    } else {
-      this.setStatus(`Tap where to tie one end of the ${d.name.toLowerCase()}`);
     }
+    this.cursor = at ?? this.defaultCursor(moving);
     this.host.audio.play('pickup');
     this.refresh();
+    this.previewCursor();
+    if (!this.lastValid && !d.link) this.setStatus('Move it with the arrows, turn it, then ✔ PLACE');
+    if (d.link) this.setStatus(`Aim at where one end of the ${d.name.toLowerCase()} goes, then ✔`);
+  }
+
+  private tintGhost(color: number) {
+    this.ghost?.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.material = M.basic(color, 0.5);
+        m.castShadow = false;
+      }
+    });
+  }
+
+  /** Where the aim starts: over the moved part, on top of the machine, or mid-bench. */
+  private defaultCursor(moving?: MoveState): { x: number; y: number } {
+    let at: THREE.Vector3;
+    if (moving) at = moving.oldRoot.p.clone();
+    else if (this.bp.parts.length) {
+      const b = blueprintBounds(this.bp);
+      at = new THREE.Vector3((b.min.x + b.max.x) / 2, b.max.y, (b.min.z + b.max.z) / 2);
+    } else at = new THREE.Vector3(0, 0, 0);
+    return this.toScreen(at);
+  }
+
+  private toScreen(machinePoint: THREE.Vector3): { x: number; y: number } {
+    const p = machinePoint.clone().add(this.host.benchOrigin).project(this.host.r.camera);
+    const rect = this.host.r.canvas.getBoundingClientRect();
+    return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
+  }
+
+  private nudge(dx: number, dy: number) {
+    if (!this.cursor) return;
+    const rect = this.host.r.canvas.getBoundingClientRect();
+    const step = Math.max(6, rect.height / 90);
+    this.cursor.x = THREE.MathUtils.clamp(this.cursor.x + dx * step, rect.left + 4, rect.right - 4);
+    this.cursor.y = THREE.MathUtils.clamp(this.cursor.y + dy * step, rect.top + 4, rect.bottom - 4);
+    this.previewCursor();
+  }
+
+  private previewCursor() {
+    if (!this.cursor) return;
+    this.cursorEl.style.left = `${this.cursor.x}px`;
+    this.cursorEl.style.top = `${this.cursor.y}px`;
+    this.preview(this.cursor.x, this.cursor.y);
   }
 
   private clearHolding(refresh = true) {
+    const mv = this.holding?.moving;
+    if (mv) {
+      // Abandoned a move: put everything back exactly as it was.
+      Object.assign(this.bp, clone(mv.snapshot));
+      this.holding = null;
+      this.view.rebuild();
+      this.rebuildProxies();
+    }
     this.holding = null;
     this.linkStart = null;
+    this.cursor = null;
     this.ghost?.removeFromParent();
     this.ghost = null;
     this.linkLine?.removeFromParent();
@@ -437,9 +564,9 @@ export class BuildMode {
 
   private spin(deg: number) {
     if (!this.holding) return;
-    this.holding.spin = (this.holding.spin + deg) % 360;
+    this.holding.spin = (((this.holding.spin + deg) % 360) + 360) % 360;
     this.host.audio.play('ui');
-    if (this.hover) this.preview(this.hover.x, this.hover.y);
+    this.previewCursor();
   }
 
   private cycleSocket() {
@@ -449,7 +576,95 @@ export class BuildMode {
     this.holding.socket = def.sockets[(i + 1) % def.sockets.length].id;
     this.host.audio.play('ui');
     this.renderTools();
-    if (this.hover) this.preview(this.hover.x, this.hover.y);
+    this.previewCursor();
+  }
+
+  // ------------------------------------------------------------------ moving placed parts
+
+  /** Everything attached (directly or through others) onto this part. */
+  private descendants(uid: number): Set<number> {
+    const set = new Set([uid]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const c of this.bp.connections) {
+        if (set.has(c.a) && !set.has(c.b)) {
+          set.add(c.b);
+          grew = true;
+        }
+      }
+    }
+    return set;
+  }
+
+  private startMove(uid: number) {
+    const root = findPart(this.bp, uid);
+    if (!root) return;
+    const snapshot = clone(this.bp);
+    const set = this.descendants(uid);
+    const parts = this.bp.parts.filter((p) => set.has(p.uid));
+    const connections = this.bp.connections.filter((c) => set.has(c.a) && set.has(c.b));
+    const links = this.bp.links.filter((l) => set.has(l.a.part) || set.has(l.b.part));
+    for (const l of links) {
+      const lp = findPart(this.bp, l.part);
+      if (lp) parts.push(lp);
+    }
+    const linkParts = new Set(links.map((l) => l.part));
+    this.bp.parts = this.bp.parts.filter((p) => !set.has(p.uid) && !linkParts.has(p.uid));
+    this.bp.connections = this.bp.connections.filter((c) => !set.has(c.a) && !set.has(c.b));
+    this.bp.links = this.bp.links.filter((l) => !links.includes(l));
+    const rp = partPose(root);
+    const at = this.toScreen(rp.p);
+    this.view.rebuild();
+    this.rebuildProxies();
+    this.startHolding(root.def, { uid, snapshot, oldRoot: { p: rp.p, q: rp.q }, parts, connections, links }, at);
+  }
+
+  /** Drop a moved part (and everything riding on it) at a new placement. */
+  private commitMove(pl: Placement) {
+    const mv = this.holding!.moving!;
+    const inv = mv.oldRoot.q.clone().invert();
+    const dq = pl.pose.q.clone().multiply(inv);
+    const move = (v: THREE.Vector3) => v.sub(mv.oldRoot.p).applyQuaternion(dq).add(pl.pose.p);
+    for (const p of mv.parts) {
+      const pp = partPose(p);
+      const np = move(pp.p);
+      const nq = dq.clone().multiply(pp.q);
+      p.p = [np.x, np.y, np.z];
+      p.q = [nq.x, nq.y, nq.z, nq.w];
+      if (p.uid === mv.uid) p.settings = { ...p.settings, mount: this.holding!.socket, spin: this.holding!.spin };
+    }
+    for (const c of mv.connections) {
+      const a = move(v3(c.anchor));
+      c.anchor = [a.x, a.y, a.z];
+      if (c.axis) {
+        const ax = v3(c.axis).applyQuaternion(dq);
+        c.axis = [ax.x, ax.y, ax.z];
+      }
+    }
+    this.bp.parts.push(...mv.parts);
+    this.bp.connections.push(...mv.connections);
+    if (pl.conn) {
+      this.bp.connections.push({
+        a: pl.conn.target,
+        b: mv.uid,
+        kind: pl.conn.kind,
+        anchor: [pl.conn.anchor.x, pl.conn.anchor.y, pl.conn.anchor.z],
+        axis: pl.conn.axis ? [pl.conn.axis.x, pl.conn.axis.y, pl.conn.axis.z] : undefined,
+        tether: pl.conn.tether,
+      });
+    }
+    // Ropes that can no longer reach come off and go back on the shelf.
+    for (const l of mv.links) {
+      this.bp.links.push(l);
+      const def = getPart(findPart(this.bp, l.part)!.def);
+      const [a, b] = linkWorldEnds(this.bp, l);
+      if (def.link && a.distanceTo(b) > def.link.maxSpan) {
+        for (const d of removePart(this.bp, l.part)) this.host.stash.give(d);
+        this.host.toasts.show(`The ${def.name.toLowerCase()} couldn't reach any more`, 'bad');
+      }
+    }
+    this.holding!.moving = undefined;
   }
 
   private placementAt(x: number, y: number): Placement | null {
@@ -478,12 +693,13 @@ export class BuildMode {
     }
     this.ghost.visible = true;
     this.ghost.position.copy(pl.pose.p).add(this.host.benchOrigin);
+    this.ghost.userData.base = this.ghost.position.clone();
     this.ghost.quaternion.copy(pl.pose.q);
+    // Hover just off the spot it will land on.
+    this.hoverLift.copy(pl.conn && pl.conn.kind !== 'tether' ? pl.pose.p.clone().sub(pl.conn.anchor).normalize() : new THREE.Vector3(0, 1, 0));
+    this.lastValid = pl.valid;
     const color = pl.valid ? (pl.conn && pl.conn.kind !== 'weld' ? 0x40c0ff : 0x40ff80) : 0xff4030;
-    this.ghost.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) m.material = M.basic(color, 0.5);
-    });
+    this.tintGhost(color);
     if (!pl.valid) this.setStatus(pl.reason ?? 'Nope', 'bad');
     else if (pl.conn) {
       const target = getPart(findPart(this.bp, pl.conn.target)!.def).name.toLowerCase();
@@ -515,6 +731,11 @@ export class BuildMode {
     this.setStatus(ok ? `${len.toFixed(2)} m — tap to tie it` : len > def.link!.maxSpan ? 'Too far apart' : 'Pick something else', ok ? 'good' : 'bad');
   }
 
+  /** ✔: lock the held part in wherever it is aimed. */
+  private lockIn() {
+    if (this.cursor) this.commitAt(this.cursor.x, this.cursor.y);
+  }
+
   private commitAt(x: number, y: number) {
     if (!this.holding) return;
     const def = getPart(this.holding.def);
@@ -528,7 +749,8 @@ export class BuildMode {
       if (!this.linkStart) {
         this.linkStart = { part: hit.uid, point: hit.point };
         this.host.audio.play('tie');
-        this.setStatus('Now tap where the other end goes');
+        this.setStatus('Now aim at where the other end goes, then ✔');
+        this.renderTools();
         return;
       }
       const res = addLink(this.bp, def.id, this.linkStart, { part: hit.uid, point: hit.point });
@@ -552,30 +774,39 @@ export class BuildMode {
       if (pl?.reason) this.setStatus(pl.reason, 'bad');
       return;
     }
-    commitPlacement(this.bp, pl);
+    if (this.holding.moving) {
+      const uid = this.holding.moving.uid;
+      this.commitMove(pl);
+      this.host.audio.play('attach');
+      this.afterChange();
+      this.popUid(uid);
+      this.clearHolding();
+      return;
+    }
+    const uid = commitPlacement(this.bp, pl, { mount: this.holding.socket, spin: this.holding.spin });
     this.host.stash.take(def.id);
     this.host.audio.play('attach');
-    this.pop(pl.pose.p.clone().add(this.host.benchOrigin));
     this.afterChange();
+    this.popUid(uid);
     this.continueOrStop(def.id);
   }
 
   private continueOrStop(def: string) {
     if (this.host.stash.infinite || this.host.stash.count(def) > 0) {
+      // Keep holding another one, aimed where the last one went.
       this.refresh();
+      this.previewCursor();
       return;
     }
     this.clearHolding();
   }
 
-  private pop(at: THREE.Vector3) {
-    const uid = this.bp.parts[this.bp.parts.length - 1]?.uid;
-    const g = uid !== undefined ? this.view.parts.get(uid) : null;
+  private popUid(uid: number) {
+    const g = this.view.parts.get(uid);
     if (g) {
       g.scale.setScalar(1.25);
       g.userData.popT = 0.18;
     }
-    void at;
   }
 
   private afterChange() {
@@ -633,7 +864,8 @@ export class BuildMode {
     if (this.testing && e.pointerType !== 'mouse') {
       // allow orbiting while testing
     }
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now() });
+    const nearCursor = !!this.cursor && Math.hypot(e.clientX - this.cursor.x, e.clientY - this.cursor.y) < 60;
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now(), grab: !!this.holding && nearCursor && e.pointerType !== 'mouse' });
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x) };
@@ -654,8 +886,10 @@ export class BuildMode {
     if (!this.active) return;
     const p = this.pointers.get(e.pointerId);
     if (e.pointerType === 'mouse' && !p) {
-      this.hover = { x: e.clientX, y: e.clientY };
-      if (this.holding && (e.target as HTMLElement) === this.host.r.canvas) this.preview(e.clientX, e.clientY);
+      if (this.holding && (e.target as HTMLElement) === this.host.r.canvas) {
+        this.cursor = { x: e.clientX, y: e.clientY };
+        this.previewCursor();
+      }
       return;
     }
     if (!p) return;
@@ -680,10 +914,12 @@ export class BuildMode {
       return;
     }
     const oy = this.touchOffset(e);
-    if (this.holding && (this.dragFromTray || e.pointerType === 'mouse')) {
-      this.hover = { x: e.clientX, y: e.clientY + oy };
-      if (!this.overTray(e.clientY)) this.preview(e.clientX, e.clientY + oy);
-      else if (this.ghost) this.ghost.visible = false;
+    // Dragging the ghost itself (from the tray, or grabbed near the aim point) moves it.
+    if (this.holding && (this.dragFromTray || e.pointerType === 'mouse' || p.grab)) {
+      if (!this.overTray(e.clientY)) {
+        this.cursor = { x: e.clientX, y: e.clientY + oy };
+        this.previewCursor();
+      } else if (this.ghost) this.ghost.visible = false;
       return;
     }
     // Orbit
@@ -705,20 +941,28 @@ export class BuildMode {
     const tap = moved < 10 && performance.now() - p.t < 450;
     if (this.dragFromTray) {
       this.dragFromTray = false;
-      if (!tap && this.holding) {
-        if (this.overTray(e.clientY)) this.clearHolding();
-        else this.commitAt(e.clientX, e.clientY + (e.pointerType === 'touch' ? -70 : 0));
-      }
+      // Dropped over the tray: never mind. Anywhere else: it hovers there, waiting for ✔.
+      if (!tap && this.holding && this.overTray(e.clientY)) this.clearHolding();
       return;
     }
     if (this.testing || !tap) return;
     if ((e.target as HTMLElement) !== this.host.r.canvas) return;
     if (this.holding) {
-      this.commitAt(e.clientX, e.clientY);
+      // Tap the ghost (or click, with a mouse) to lock it in; tap elsewhere to aim there.
+      const onGhost = this.cursor && Math.hypot(e.clientX - this.cursor.x, e.clientY - this.cursor.y) < 40;
+      if (onGhost || e.pointerType === 'mouse') this.commitAt(e.clientX, e.clientY);
+      else {
+        this.cursor = { x: e.clientX, y: e.clientY };
+        this.previewCursor();
+      }
       return;
     }
     const hit = this.pick(e.clientX, e.clientY);
-    this.select(hit && hit.uid !== null ? hit.uid : null);
+    const uid = hit && hit.uid !== null ? hit.uid : null;
+    // Tapping the part that is already selected picks it back up to move it.
+    const part = uid !== null ? findPart(this.bp, uid) : null;
+    if (uid !== null && uid === this.selected && part && !getPart(part.def).link) this.startMove(uid);
+    else this.select(uid);
   }
 
   private key(k: string) {
@@ -729,6 +973,16 @@ export class BuildMode {
     }
     if (k === 'r') this.spin(45);
     if (k === 'f') this.cycleSocket();
+    if (this.holding) {
+      if (k === 'arrowup') this.nudge(0, -1);
+      if (k === 'arrowdown') this.nudge(0, 1);
+      if (k === 'arrowleft') this.nudge(-1, 0);
+      if (k === 'arrowright') this.nudge(1, 0);
+      if (k === 'q') this.spin(-15);
+      if (k === 'e') this.spin(15);
+      if (k === 'enter' || k === ' ') this.lockIn();
+    }
+    if (k === 'm' && this.selected !== null) this.startMove(this.selected);
     if ((k === 'delete' || k === 'backspace') && this.selected !== null) this.remove(this.selected);
   }
 
@@ -803,6 +1057,11 @@ export class BuildMode {
 
   update(dt: number) {
     this.time += dt;
+    if (this.ghost?.visible) {
+      const lift = 0.05 + Math.sin(this.time * 4) * 0.012;
+      const base = this.ghost.userData.base as THREE.Vector3 | undefined;
+      if (base) this.ghost.position.copy(base).addScaledVector(this.hoverLift, lift);
+    }
     for (const m of this.markers.children) m.scale.setScalar(1 + Math.sin(this.time * 6) * 0.25);
     for (const g of this.view.parts.values()) {
       if (g.userData.popT > 0) {

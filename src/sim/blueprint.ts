@@ -33,6 +33,9 @@ export interface PartSettings {
   reverse?: boolean;
   delay?: number;
   length?: number;
+  /** How it was mounted, so moving it later starts from the same orientation. */
+  mount?: string;
+  spin?: number;
 }
 
 export interface BPConnection {

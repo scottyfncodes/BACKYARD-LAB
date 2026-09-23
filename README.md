@@ -22,7 +22,7 @@ npm run dev        # http://localhost:5173
 | Drop / throw | `Q` / `F` | Buttons |
 | Run machines / reset | `G` / `R` | ▶ GO / ⟲ RESET |
 | Camera, drive/walk, RC switch, replay | `C`, `Tab`, `X`, `V` | Buttons |
-| Workbench | Drag parts from the tray; `R` turn, `F` change mount side, wheel to zoom, drag to orbit | Drag or tap-then-tap; two fingers to pinch-zoom and twist |
+| Workbench | Pick a part: its ghost hovers over the bench. Arrow keys / mouse aim it, `Q`/`E` turn, `F` mount side, `Enter` or click to place. Select a placed part and press `M` to move it | Tap a part in the tray: its ghost hovers over the bench. D-pad aims it, ↺ ↻ turn it, ✔ PLACE locks it in. Tap a placed part twice (or ✥ Move) to pick it back up, along with everything attached to it |
 
 Add `?q=low` to the URL for low graphics (no shadows or grass).
 

@@ -458,3 +458,55 @@ body.building .thought::after { display: none; }
 @media (max-width: 600px) {
   .build-tools .btn { min-height: 44px; font-size: 14px; padding: 6px 10px; }
 }
+
+/* ---------------------------------------------------------------- placing a part */
+.dpad {
+  position: fixed;
+  left: calc(10px + var(--safe-l));
+  bottom: calc(128px + var(--safe-b));
+  display: grid;
+  grid-template-columns: repeat(3, 54px);
+  grid-template-rows: repeat(3, 54px);
+  gap: 5px;
+}
+.dpad .btn { min-width: 0; min-height: 0; width: 54px; height: 54px; padding: 0; font-size: 22px; border-radius: 14px; }
+.dpad-mid {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+.place-bar {
+  position: fixed;
+  right: calc(10px + var(--safe-r));
+  bottom: calc(128px + var(--safe-b));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  max-width: 46vw;
+}
+.place-bar .btn.go { font-size: 19px; min-height: 60px; padding: 8px 16px; }
+.place-bar .btn.small { white-space: normal; }
+.build-cursor {
+  position: fixed;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border: 3px dashed #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(47, 36, 24, 0.5);
+  pointer-events: none !important;
+  animation: spin-slow 3s linear infinite;
+}
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+.build-status { bottom: auto !important; top: calc(70px + var(--safe-t)); }
+@media (max-height: 480px) {
+  .dpad { bottom: calc(104px + var(--safe-b)); grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); }
+  .dpad .btn { width: 44px; height: 44px; font-size: 18px; }
+  .place-bar { bottom: calc(104px + var(--safe-b)); }
+  .place-bar .btn.go { min-height: 48px; font-size: 16px; }
+}
