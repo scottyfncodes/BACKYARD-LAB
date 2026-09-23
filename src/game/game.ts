@@ -4,6 +4,7 @@ import { getPart, PART_MAP } from '../data/parts';
 import { PROJECT_MAP, PROJECTS, STAGES, type ProjectDef } from '../data/projects';
 import { EAST_FENCE_X, inZone, LOOK_HINTS, WORLD } from '../data/world';
 import { buildEnvironment, type Environment } from '../render/environment';
+import { ideasFor } from '../data/ideas';
 import { Effects } from '../render/effects';
 import { detectQuality, Renderer } from '../render/renderer';
 import { BlueprintView, WorldView } from '../render/views';
@@ -65,6 +66,7 @@ export class Game {
   private hintTimer = 0;
   private lastLookKey = '';
   private absorbedOnce = new Set<number>();
+  private ideaOffered = new Set<string>();
 
   // UI
   ui: HTMLElement;
@@ -181,6 +183,8 @@ export class Game {
       onStopTest: () => this.stopTest(),
       onChange: () => this.persistSoon(),
       creations: () => this.save.creations,
+      ideas: () => ideasFor(this.sandbox ? null : this.projectId),
+      onBench: (d: string) => (this.stash.get(d) ?? 0) + this.build.bp.parts.filter((p) => p.def === d).length,
       saveCreation: (bp: Blueprint) => {
         this.save.creations.unshift({ name: bp.name, bp: clone(bp), savedAt: Date.now() });
         this.save.creations = this.save.creations.slice(0, 24);
@@ -697,6 +701,11 @@ export class Game {
     this.thought.hide();
     document.body.classList.add('building');
     this.build.enter(this.bench);
+    // First time in the lab on a project with an idea: offer it.
+    if (!this.sandbox && this.projectId && !this.save.completed[this.projectId] && !this.bench.parts.length && !this.ideaOffered.has(this.projectId) && ideasFor(this.projectId).length) {
+      this.ideaOffered.add(this.projectId);
+      setTimeout(() => this.mode === 'build' && this.build.showIdea(true), 500);
+    }
   }
 
   private exitBuild(bp: Blueprint) {
@@ -761,7 +770,7 @@ export class Game {
     let target = eye.clone().addScaledVector(flat, reach);
     const hit = this.sim.physics.raycast(eye, look, reach + 2.5, groups(0xffff, GROUP.STATIC));
     if (hit && hit.normal.y > 0.7) target = hit.point;
-    const down = this.sim.physics.raycast(new THREE.Vector3(target.x, 4, target.z), new THREE.Vector3(0, -1, 0), 6, groups(0xffff, GROUP.STATIC), undefined, (col) => {
+    const down = this.sim.physics.raycast(new THREE.Vector3(target.x, Math.min(eye.y + 0.9, target.y + 1.5), target.z), new THREE.Vector3(0, -1, 0), 6, groups(0xffff, GROUP.STATIC), undefined, (col) => {
       const t = this.sim.physics.tags.get(col.handle);
       return !t || t.owner.kind === 'static';
     });

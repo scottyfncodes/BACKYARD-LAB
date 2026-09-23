@@ -512,3 +512,62 @@ body.building .thought::after { display: none; }
 }
 .dpad .btn.rot { display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; font-size: 20px; }
 .dpad .btn.rot small { font-size: 9px; font-weight: 900; letter-spacing: 0.04em; margin-top: 2px; opacity: 0.75; }
+
+/* ---------------------------------------------------------------- ideas / guided build */
+.idea-card {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 440px);
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--paper);
+  border: 4px solid var(--ink);
+  border-radius: 22px;
+  padding: 16px 18px;
+  box-shadow: 0 8px 0 rgba(47, 36, 24, 0.4);
+  z-index: 6;
+  animation: pop 0.25s ease-out;
+}
+.idea-card h2 { margin: 2px 0 6px; }
+.idea-card p { margin: 4px 0 10px; font-weight: 700; }
+.idea-card .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.idea-card .row .btn { flex: 1 1 auto; }
+.idea-list { display: grid; grid-template-columns: 1fr; gap: 4px; }
+.idea-row { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 14px; background: #ffe6d6; border-radius: 10px; padding: 3px 8px; }
+.idea-row.ok { background: #dff3df; }
+.idea-row img { width: 34px; height: 34px; object-fit: contain; }
+.idea-row small { margin-left: auto; font-weight: 700; opacity: 0.8; text-align: right; }
+.guide-card {
+  position: fixed;
+  left: 50%;
+  top: calc(66px + var(--safe-t));
+  transform: translateX(-50%);
+  width: min(92vw, 460px);
+  background: #fff7d1;
+  border: 3px solid var(--ink);
+  border-radius: 16px;
+  padding: 8px 12px;
+  box-shadow: var(--shadow);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  align-items: center;
+}
+.guide-card .guide-head { grid-column: 1 / -1; font-size: 12px; font-weight: 900; opacity: 0.7; }
+.guide-card .guide-say { font-weight: 900; font-size: 16px; grid-column: 1; }
+.guide-card .guide-part { font-weight: 700; font-size: 13px; grid-column: 1; }
+.guide-card .guide-part.missing { color: #b0301c; }
+.guide-card .btn { grid-column: 2; grid-row: 2 / span 2; }
+.build-ui.guiding .build-status { top: calc(168px + var(--safe-t)); }
+.slot.wanted { animation: wanted 0.9s ease-in-out infinite; background: #fff1b8; }
+@keyframes wanted { 50% { transform: translateY(-8px); box-shadow: 0 0 0 4px var(--orange); } }
+.build-cursor.gold { border-color: #ffc83a; border-style: solid; box-shadow: 0 0 0 3px rgba(255, 200, 58, 0.5), 0 0 18px #ffc83a; }
+/* Build mode on phones: keep the top bar on one line and thoughts clear of it. */
+body.building .thought { top: calc(132px + var(--safe-t)); max-width: min(80vw, 460px); font-size: 15px; }
+body.building .build-ui.guiding ~ .thought, body.building .thought { z-index: 1; }
+@media (max-width: 600px) {
+  .build-top .btn { min-height: 44px; padding: 6px 10px; font-size: 14px; border-radius: 12px; }
+  .build-top .chip { font-size: 13px; max-width: 34vw; }
+}

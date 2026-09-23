@@ -26,6 +26,8 @@ import { BlueprintView } from '../render/views';
 import { btn, h, type Thought, type Toasts } from '../ui/dom';
 import type { CameraDirector } from './camera';
 import { generateStuds, rankInDirection, type Stud } from './studs';
+import { WHERE, type Idea } from '../data/ideas';
+import { transformPoint } from '../sim/geom';
 
 export interface Stash {
   infinite: boolean;
@@ -53,6 +55,9 @@ export interface BuildHost {
   onChange(bp: Blueprint): void;
   creations(): { name: string; bp: Blueprint }[];
   saveCreation(bp: Blueprint): void;
+  ideas(): Idea[];
+  /** Parts on the bench plus parts on the shelf, for the idea checklist. */
+  onBench(def: string): number;
 }
 
 interface MoveState {
@@ -69,6 +74,8 @@ interface Holding {
   socket?: string;
   spin: number;
   tilt: number;
+  /** The player turned / flipped it themselves: stop auto-orienting. */
+  manual: boolean;
   moving?: MoveState;
 }
 
@@ -149,6 +156,11 @@ export class BuildMode {
   private aim = -1;
   private placeCache = new Map<number, Placement | null>();
   private studMesh: THREE.InstancedMesh | null = null;
+  private fineTune = false;
+  /** Following an idea's instructions. */
+  guide: { idea: Idea; step: number; uids: number[] } | null = null;
+  private guideEl!: HTMLElement;
+  private guideFinished = false;
   private raycaster = new THREE.Raycaster();
   private listeners: [EventTarget, string, EventListener][] = [];
   private time = 0;
@@ -223,10 +235,12 @@ export class BuildMode {
     this.dpad = h('div', { class: 'dpad hidden' });
     this.placeBar = h('div', { class: 'place-bar hidden' });
     this.cursorEl = h('div', { class: 'build-cursor hidden' });
+    this.guideEl = h('div', { class: 'guide-card hidden' });
+    this.guideEl.addEventListener('pointerdown', (e) => e.stopPropagation());
     for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar]) {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
-    this.root.append(top, this.tray, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.cursorEl);
+    this.root.append(top, this.tray, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.cursorEl, this.guideEl);
     this.host.ui.appendChild(this.root);
   }
 
@@ -250,6 +264,7 @@ export class BuildMode {
     this.renderTools();
     this.renderPanel();
     this.renderMarkers();
+    this.renderGuide();
   }
 
   private escape(s: string) {
@@ -265,6 +280,7 @@ export class BuildMode {
         b.push(btn('💾', () => this.saveCreation(), 'small'));
         b.push(btn('📂', () => this.loadMenu(), 'small'));
       }
+      if (this.host.ideas().length && !this.guide) b.push(btn('💡 Idea', () => this.showIdea(), 'small'));
       if (this.bp.parts.length) b.push(btn('▶ TEST', () => this.test(), 'blue'));
       if (this.bp.parts.length) b.push(btn('✔ DONE', () => this.done(), 'primary'));
       b.push(btn('✕', () => this.leave(), 'small'));
@@ -290,7 +306,7 @@ export class BuildMode {
         const def = getPart(id);
         const slot = h(
           'div',
-          { class: `slot ${this.holding?.def === id ? 'active' : ''} ${count <= 0 ? 'empty' : ''}` },
+          { class: `slot ${this.holding?.def === id ? 'active' : ''} ${count <= 0 ? 'empty' : ''} ${!this.holding && this.guideStep()?.part === id ? 'wanted' : ''}` },
           h('img', { src: partThumb(this.host.r.renderer, id), alt: def.name, draggable: 'false' }),
           h('div', { class: 'name' }, def.name),
           h('div', { class: 'count' }, this.host.stash.infinite ? '∞' : String(count)),
@@ -304,7 +320,7 @@ export class BuildMode {
   private renderTools() {
     this.tools.replaceChildren();
     const holding = this.holding && !this.testing;
-    this.dpad.classList.toggle('hidden', !holding);
+    this.dpad.classList.toggle('hidden', !holding || !this.fineTune);
     this.placeBar.classList.toggle('hidden', !holding);
     this.cursorEl.classList.toggle('hidden', !holding);
     if (!holding) return;
@@ -326,10 +342,11 @@ export class BuildMode {
     const moving = !!this.holding!.moving;
     if (def.link) bar.push(btn(this.linkStart ? '✔ TIE HERE' : '✔ TIE END', () => this.lockIn(), 'go'));
     else bar.push(btn('✔ PLACE', () => this.lockIn(), 'go'));
-    if (!def.link && def.sockets.length > 1) {
+    if (this.fineTune && !def.link && def.sockets.length > 1) {
       const sk = def.sockets.find((x) => x.id === this.holding!.socket) ?? def.sockets[0];
       bar.push(btn(`⇅ ${sk.label}`, () => this.cycleSocket(), 'small'));
     }
+    if (!def.link) bar.push(btn(this.fineTune ? '✓ Auto fit' : '🎯 Fine tune', () => this.toggleFineTune(), 'small'));
     bar.push(btn(moving ? '✕ Undo move' : '✕ Put back', () => this.clearHolding(), 'small'));
     this.placeBar.replaceChildren(...bar);
   }
@@ -375,6 +392,7 @@ export class BuildMode {
   }
 
   private setStatus(text: string | null, kind: '' | 'bad' | 'good' = '') {
+    if (text && this.guide && kind !== 'bad') text = null;
     if (!text) {
       this.status.classList.add('hidden');
       return;
@@ -480,7 +498,7 @@ export class BuildMode {
     this.select(null);
     const d = getPart(def);
     const settings = moving ? moving.parts.find((p) => p.uid === moving.uid)?.settings : undefined;
-    this.holding = { def, spin: settings?.spin ?? 0, tilt: settings?.tilt ?? 0, socket: settings?.mount ?? d.sockets[0]?.id, moving };
+    this.holding = { def, spin: settings?.spin ?? 0, tilt: settings?.tilt ?? 0, socket: settings?.mount ?? d.sockets[0]?.id, manual: false, moving };
     if (!d.link) {
       this.ghost = new THREE.Group();
       // The ghost carries everything attached to the part being moved.
@@ -504,9 +522,11 @@ export class BuildMode {
     this.host.audio.play('pickup');
     this.regenStuds();
     this.refresh();
+    if (this.aimGuide()) return;
     const start = at ?? this.defaultCursor(moving);
     if (!this.snapNear(start.x, start.y, Infinity)) this.firstValidStud();
-    if (d.link) this.setStatus(`Pick where one end of the ${d.name.toLowerCase()} goes, then ✔`);
+    if (d.link) this.setStatus(`Tap where one end of the ${d.name.toLowerCase()} goes`);
+    else if (this.host.hints) this.setStatus('Drag it where you want it. Let go and it clicks on.', 'good');
   }
 
   private tintGhost(color: number) {
@@ -568,13 +588,74 @@ export class BuildMode {
     this.studMesh.instanceMatrix.needsUpdate = true;
   }
 
+  private placeWith(st: Stud, socket: string | undefined, spin: number, tilt: number): Placement {
+    const h = this.holding!;
+    if (st.part === null) return placeFree(this.bp, h.def, st.point.x, st.point.z, spin, socket, tilt);
+    return computeAttach(this.bp, h.def, socket, { part: st.part, point: st.point, normal: st.normal }, spin, tilt);
+  }
+
+  /**
+   * Auto-fit: try every way of holding the part against this spot and keep
+   * the most natural one. Wheels go on as axles, things sit flat and low,
+   * motor shafts point outward, long things line up with what they sit on.
+   */
+  private autoPlacement(st: Stud): Placement | null {
+    const h = this.holding!;
+    const def = getPart(h.def);
+    const up = new THREE.Vector3(0, 1, 0);
+    let best: { pl: Placement; score: number; socket?: string; spin: number } | null = null;
+    const target = st.part !== null ? findPart(this.bp, st.part) : null;
+    const tq = target ? partPose(target).q : null;
+    const longAxis = (d: typeof def, q: THREE.Quaternion) => {
+      const b = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: d.id, p: [0, 0, 0], q: [0, 0, 0, 1] }], links: [] });
+      const size = b.max.clone().sub(b.min);
+      const ax = size.x >= size.y && size.x >= size.z ? new THREE.Vector3(1, 0, 0) : size.z >= size.y ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+      return { dir: ax.applyQuaternion(q), long: Math.max(size.x, size.y, size.z) / Math.max(1e-3, Math.min(size.x, size.y, size.z)) };
+    };
+    const sockets = def.sockets.length ? def.sockets : [undefined];
+    for (const sk of sockets) {
+      for (const spin of [0, 90, 180, 270]) {
+        const pl = this.placeWith(st, sk?.id, spin, 0);
+        if (!pl.valid) continue;
+        let score = 0;
+        const n = st.normal;
+        const sideFace = Math.abs(n.y) < 0.5;
+        if (pl.conn && pl.conn.kind !== 'weld') score += 5; // real joints are what special spots are for
+        if (sk?.joint === 'axle') score += sideFace ? 4 : -2; // wheels on the sides, not lying flat
+        // Sit low and snug: centre of the part close to the surface.
+        const rise = pl.pose.p.clone().sub(st.point);
+        score -= (sideFace ? rise.length() : Math.max(0, rise.dot(up))) * 6;
+        // Motor shafts (and any output) point away from what they are stuck to.
+        for (const t of def.targets ?? []) {
+          const out = new THREE.Vector3(...t.normal).applyQuaternion(pl.pose.q);
+          if (sideFace) score += out.dot(n) * 3;
+          else score += Math.abs(out.y) < 0.3 ? 1 : 0;
+        }
+        // Long things line up with long things.
+        const mine = longAxis(def, pl.pose.q);
+        if (tq && target && mine.long > 2) {
+          const theirs = longAxis(getPart(target.def), tq);
+          if (theirs.long > 2) score += Math.abs(mine.dir.dot(theirs.dir)) * 2;
+        }
+        if (sk?.id === def.sockets[0]?.id) score += 0.3;
+        if (spin === 0) score += 0.1;
+        if (!best || score > best.score) best = { pl, score, socket: sk?.id, spin };
+      }
+    }
+    if (!best) return this.placeWith(st, h.socket, h.spin, h.tilt);
+    best.pl.snapped = best.pl.snapped;
+    (best.pl as Placement & { auto?: { socket?: string; spin: number } }).auto = { socket: best.socket, spin: best.spin };
+    return best.pl;
+  }
+
   private placementFor(i: number): Placement | null {
     if (this.placeCache.has(i)) return this.placeCache.get(i)!;
     const h = this.holding!;
     const st = this.studs[i];
     let pl: Placement | null = null;
-    if (st.part === null) pl = placeFree(this.bp, h.def, st.point.x, st.point.z, h.spin, h.socket, h.tilt);
-    else pl = computeAttach(this.bp, h.def, h.socket, { part: st.part, point: st.point, normal: st.normal }, h.spin, h.tilt);
+    if (getPart(h.def).link) pl = null;
+    else if (h.manual) pl = this.placeWith(st, h.socket, h.spin, h.tilt);
+    else pl = this.autoPlacement(st);
     // Nothing is allowed to sink through the bench top.
     if (pl && pl.valid && !getPart(h.def).link) {
       const low = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: h.def, p: [pl.pose.p.x, pl.pose.p.y, pl.pose.p.z], q: [pl.pose.q.x, pl.pose.q.y, pl.pose.q.z, pl.pose.q.w] }], links: [] }).min.y;
@@ -658,6 +739,7 @@ export class BuildMode {
     const s = this.toScreen(this.studs[this.aim].point);
     this.cursor = s;
     this.cursorEl.classList.remove('hidden');
+    this.cursorEl.classList.toggle('gold', this.studs[this.aim].special === 'guide');
     this.cursorEl.style.left = `${s.x}px`;
     this.cursorEl.style.top = `${s.y}px`;
     this.preview();
@@ -696,8 +778,38 @@ export class BuildMode {
     if (refresh) this.refresh();
   }
 
+  /** Switching to manual turning starts from whatever auto-fit had chosen. */
+  private takeOverOrientation() {
+    const h = this.holding!;
+    if (h.manual) return;
+    const pl = this.aim >= 0 ? (this.placementFor(this.aim) as (Placement & { auto?: { socket?: string; spin: number } }) | null) : null;
+    if (pl?.auto) {
+      h.socket = pl.auto.socket;
+      h.spin = pl.auto.spin;
+    }
+    h.manual = true;
+    this.fineTune = true;
+    this.placeCache.clear();
+  }
+
+  private toggleFineTune() {
+    if (!this.holding) return;
+    if (this.fineTune) {
+      this.fineTune = false;
+      this.holding.manual = false;
+      this.holding.tilt = 0;
+      this.placeCache.clear();
+      this.regenStuds();
+      this.aimGuide() || this.firstValidStud();
+    } else this.fineTune = true;
+    this.host.audio.play('ui');
+    this.renderTools();
+    this.previewCursor();
+  }
+
   private spin(deg: number) {
     if (!this.holding) return;
+    this.takeOverOrientation();
     this.holding.spin = (((this.holding.spin + deg) % 360) + 360) % 360;
     this.host.audio.play('ui');
     this.reaim();
@@ -705,6 +817,7 @@ export class BuildMode {
 
   private tilt(deg: number) {
     if (!this.holding) return;
+    this.takeOverOrientation();
     const t = this.holding.tilt + deg;
     this.holding.tilt = Math.max(-90, Math.min(90, t));
     this.host.audio.play('ui');
@@ -713,6 +826,7 @@ export class BuildMode {
 
   private cycleSocket() {
     if (!this.holding) return;
+    this.takeOverOrientation();
     const def = getPart(this.holding.def);
     const i = def.sockets.findIndex((s) => s.id === this.holding!.socket);
     this.holding.socket = def.sockets[(i + 1) % def.sockets.length].id;
@@ -774,7 +888,8 @@ export class BuildMode {
       const nq = dq.clone().multiply(pp.q);
       p.p = [np.x, np.y, np.z];
       p.q = [nq.x, nq.y, nq.z, nq.w];
-      if (p.uid === mv.uid) p.settings = { ...p.settings, mount: this.holding!.socket, spin: this.holding!.spin, tilt: this.holding!.tilt };
+      const auto = (pl as Placement & { auto?: { socket?: string; spin: number } }).auto;
+      if (p.uid === mv.uid) p.settings = { ...p.settings, mount: auto?.socket ?? this.holding!.socket, spin: auto?.spin ?? this.holding!.spin, tilt: auto ? 0 : this.holding!.tilt };
     }
     for (const c of mv.connections) {
       const a = move(v3(c.anchor));
@@ -911,7 +1026,10 @@ export class BuildMode {
       this.clearHolding();
       return;
     }
-    const uid = commitPlacement(this.bp, pl, { mount: this.holding.socket, spin: this.holding.spin, tilt: this.holding.tilt });
+    const auto = (pl as Placement & { auto?: { socket?: string; spin: number } }).auto;
+    const atGuide = this.isGuideSpot(this.aim);
+    const uid = commitPlacement(this.bp, pl, { mount: auto?.socket ?? this.holding.socket, spin: auto?.spin ?? this.holding.spin, tilt: auto ? 0 : this.holding.tilt });
+    this.guideAdvance(uid, atGuide);
     this.host.stash.take(def.id);
     this.host.audio.play('attach');
     this.afterChange();
@@ -925,6 +1043,12 @@ export class BuildMode {
       const prev = this.cursor;
       this.regenStuds();
       this.refresh();
+      if ((this.guideStep() && this.guideStep()!.part !== def) || this.guideFinished) {
+        this.guideFinished = false;
+        this.clearHolding();
+        return;
+      }
+      if (this.aimGuide()) return;
       if (!(prev && this.snapNear(prev.x, prev.y, 200))) this.firstValidStud();
       return;
     }
@@ -943,7 +1067,7 @@ export class BuildMode {
     this.view.rebuild();
     this.rebuildProxies();
     this.host.onChange(this.bp);
-    if (this.host.hints) {
+    if (this.host.hints && !this.guide) {
       const n = this.bp.parts.length;
       if (n === 1) this.host.thought.say('Now stick more stuff onto it. Wheels spin on axles. Motors spin whatever is on their shaft.', 5500);
       if (n === 3 && this.bp.parts.some((p) => getPart(p.def).behaviors.some((b) => b.type === 'motor')) && !this.bp.parts.some((p) => p.def.startsWith('battery')))
@@ -994,8 +1118,9 @@ export class BuildMode {
     if (this.testing && e.pointerType !== 'mouse') {
       // allow orbiting while testing
     }
-    const nearCursor = !!this.cursor && Math.hypot(e.clientX - this.cursor.x, e.clientY - this.cursor.y) < 60;
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now(), grab: !!this.holding && nearCursor && e.pointerType !== 'mouse' });
+    // With a part in hand, one finger drags the part; two fingers move the view.
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now(), grab: !!this.holding && e.pointerType !== 'mouse' && this.pointers.size === 0 });
+    if (this.pointers.size === 2) for (const q of this.pointers.values()) q.grab = false;
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x) };
@@ -1009,7 +1134,8 @@ export class BuildMode {
   }
 
   private touchOffset(e: PointerEvent) {
-    return e.pointerType === 'touch' && this.dragFromTray ? -70 : 0;
+    // Keep the part above the finger so you can see where it is going.
+    return e.pointerType === 'touch' && this.holding ? -70 : 0;
   }
 
   private pMove(e: PointerEvent) {
@@ -1030,20 +1156,17 @@ export class BuildMode {
       const ang = Math.atan2(b.y - a.y, b.x - a.x);
       const o = this.host.cam.orbit;
       o.dist = THREE.MathUtils.clamp((o.dist * this.pinch.d) / Math.max(20, d), 0.7, 6);
-      if (this.holding) {
-        const da = ((ang - this.pinch.a) * 180) / Math.PI;
-        if (Math.abs(da) > 12) {
-          this.spin(Math.sign(da) * 45);
-          this.pinch.a = ang;
-        }
-      }
+      // Two fingers moving together orbit the view.
+      o.yaw -= (dx / 2) * 0.008;
+      o.pitch = THREE.MathUtils.clamp(o.pitch + (dy / 2) * 0.006, 0.05, 1.45);
       this.pinch.d = d;
+      this.pinch.a = ang;
       return;
     }
     const oy = this.touchOffset(e);
     // Dragging the ghost itself (from the tray, or grabbed near the aim point) moves it.
     if (this.holding && (this.dragFromTray || e.pointerType === 'mouse' || p.grab)) {
-      if (!this.overTray(e.clientY)) this.snapNear(e.clientX, e.clientY + oy, 80);
+      if (!this.overTray(e.clientY)) this.snapNear(e.clientX, e.clientY + oy, 110);
       return;
     }
     // Orbit
@@ -1065,17 +1188,29 @@ export class BuildMode {
     const tap = moved < 10 && performance.now() - p.t < 450;
     if (this.dragFromTray) {
       this.dragFromTray = false;
-      // Dropped over the tray: never mind. Anywhere else: it hovers there, waiting for ✔.
-      if (!tap && this.holding && this.overTray(e.clientY)) this.clearHolding();
+      // Dropped over the tray: never mind. Anywhere else: it clicks on.
+      if (!tap && this.holding) {
+        if (this.overTray(e.clientY)) this.clearHolding();
+        else this.lockIn();
+      }
+      return;
+    }
+    // Let go after dragging a part: it clicks into place.
+    if (p.grab && !tap && this.holding && !this.fineTune) {
+      this.lockIn();
       return;
     }
     if (this.testing || !tap) return;
     if ((e.target as HTMLElement) !== this.host.r.canvas) return;
     if (this.holding) {
       // Tap the ghost (or click, with a mouse) to lock it in; tap elsewhere to aim there.
+      // Tap a spot: it clicks on there. (In fine-tune mode a tap only aims.)
       const onGhost = this.cursor && Math.hypot(e.clientX - this.cursor.x, e.clientY - this.cursor.y) < 40;
       if (onGhost || e.pointerType === 'mouse') this.lockIn();
-      else if (!this.snapNear(e.clientX, e.clientY, 120)) this.host.audio.play('error');
+      else if (this.snapNear(e.clientX, e.clientY, 120)) {
+        if (!this.fineTune && !getPart(this.holding.def).link) this.lockIn();
+        else if (getPart(this.holding.def).link) this.lockIn();
+      } else this.host.audio.play('error');
       return;
     }
     const hit = this.pick(e.clientX, e.clientY);
@@ -1175,6 +1310,158 @@ export class BuildMode {
       );
     });
     wrap.append(btn('Close', () => wrap.remove(), 'small'));
+    this.root.append(wrap);
+  }
+
+  // ------------------------------------------------------------------ ideas (guided builds)
+
+  private guideStep() {
+    return this.guide ? this.guide.idea.steps[this.guide.step] ?? null : null;
+  }
+
+  private guidePlacement(): Placement | null {
+    const g = this.guide;
+    const step = this.guideStep();
+    if (!g || !step || !this.holding || this.holding.def !== step.part) return null;
+    if (step.free) return placeFree(this.bp, step.part, step.free[0], step.free[1], step.spin ?? 0, step.socket);
+    if (step.into) {
+      const uid = g.uids[step.into.step];
+      const t = findPart(this.bp, uid);
+      if (!t) return null;
+      const tdef = getPart(t.def).targets?.find((x) => x.id === step.into!.target);
+      if (!tdef) return null;
+      const tp = partPose(t);
+      return computeAttach(this.bp, step.part, step.socket, { part: uid, point: transformPoint(tp, v3(tdef.pos)), normal: v3(tdef.normal).applyQuaternion(tp.q) }, step.spin ?? 0);
+    }
+    if (step.on !== undefined) {
+      const uid = g.uids[step.on];
+      const t = findPart(this.bp, uid);
+      if (!t) return null;
+      const tp = partPose(t);
+      return computeAttach(this.bp, step.part, step.socket, { part: uid, point: transformPoint(tp, v3(step.local!)), normal: v3(step.normal!).applyQuaternion(tp.q) }, step.spin ?? 0);
+    }
+    return null;
+  }
+
+  /** If following an idea, add its exact spot as a lock point and aim there. */
+  private aimGuide(): boolean {
+    const pl = this.guidePlacement();
+    if (!pl || !pl.valid) return false;
+    const anchor = pl.conn ? pl.conn.anchor.clone() : new THREE.Vector3(pl.pose.p.x, 0, pl.pose.p.z);
+    this.studs.unshift({ part: pl.conn?.target ?? null, point: anchor, normal: new THREE.Vector3(0, 1, 0), special: 'guide' });
+    this.placeCache.clear();
+    this.placeCache.set(0, pl);
+    this.aim = 0;
+    this.regenStudMesh();
+    this.previewCursor();
+    this.setStatus(`${this.guideStep()!.say} Drop it on the gold ring.`, 'good');
+    return true;
+  }
+
+  private isGuideSpot(i: number): boolean {
+    return !!this.guide && this.studs[i]?.special === 'guide';
+  }
+
+  private guideAdvance(uid: number, atGuide: boolean) {
+    const g = this.guide;
+    const step = this.guideStep();
+    if (!g || !step) return;
+    if (!atGuide) {
+      this.guide = null;
+      this.host.thought.say('Going my own way. Nice.', 2500);
+      return;
+    }
+    g.uids[g.step] = uid;
+    g.step++;
+    if (g.step >= g.idea.steps.length) {
+      this.host.thought.say(`Done! ${g.idea.after} (Tap ✔ DONE up top.)`, 8000);
+      this.host.audio.play('discover');
+      this.guide = null;
+      this.guideFinished = true;
+    }
+  }
+
+  private regenStudMesh() {
+    // Rebuild the dot mesh after the guide spot was prepended.
+    const studs = this.studs;
+    this.studMesh?.removeFromParent();
+    const m = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.016, 0.016, 0.006, 10), M.basic(0xffffff, 0.55), studs.length);
+    const mtx = new THREE.Matrix4();
+    studs.forEach((st, i) => {
+      const scale = st.special === 'guide' ? 3 : 1;
+      mtx.compose(st.point.clone().addScaledVector(st.normal, 0.004), new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), st.normal), new THREE.Vector3(scale, 1, scale));
+      m.setMatrixAt(i, mtx);
+    });
+    m.position.copy(this.host.benchOrigin);
+    this.studMesh = m;
+    this.host.r.scene.add(m);
+  }
+
+  private renderGuide() {
+    const step = this.guideStep();
+    const show = !!this.guide && !!step && !this.testing;
+    this.root.classList.toggle('guiding', show);
+    if (!show || !step || !this.guide) {
+      this.guideEl.classList.add('hidden');
+      return;
+    }
+    const g = this.guide;
+    const have = this.host.stash.infinite || this.host.stash.count(step.part) > 0;
+    const def = getPart(step.part);
+    this.guideEl.replaceChildren(
+      h('div', { class: 'guide-head' }, `💡 ${g.idea.title} · step ${g.step + 1} of ${g.idea.steps.length}`),
+      h('div', { class: 'guide-say' }, step.say),
+      have
+        ? h('div', { class: 'guide-part' }, this.holding ? 'Drop it on the gold ring ✨' : `Tap the ${def.name} in the tray below 👇`)
+        : h('div', { class: 'guide-part missing' }, `You need a ${def.name}. Look in ${WHERE[step.part] ?? 'the yard'}, then bring it to the lab.`),
+      btn('Stop guide', () => {
+        this.guide = null;
+        this.refresh();
+      }, 'small'),
+    );
+    this.guideEl.classList.remove('hidden');
+  }
+
+  /** The idea card: what to build, what you have, where to find the rest. */
+  showIdea(first = false) {
+    const ideas = this.host.ideas();
+    const idea = ideas[0];
+    if (!idea) return;
+    const need = new Map<string, number>();
+    for (const st of idea.steps) need.set(st.part, (need.get(st.part) ?? 0) + 1);
+    const rows = [...need.entries()].map(([id, n]) => {
+      const have = this.host.stash.infinite ? n : Math.min(n, this.host.onBench(id));
+      const ok = have >= n;
+      return h(
+        'div',
+        { class: `idea-row ${ok ? 'ok' : ''}` },
+        h('img', { src: partThumb(this.host.r.renderer, id), alt: '' }),
+        h('span', {}, `${getPart(id).name} ${have}/${n}`),
+        h('small', {}, ok ? '✓' : `in ${WHERE[id] ?? 'the yard'}`),
+      );
+    });
+    const wrap = h('div', { class: 'idea-card' });
+    wrap.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const close = () => wrap.remove();
+    const start = () => {
+      close();
+      // Start from a clean bench so the steps line up.
+      for (const p of [...this.bp.parts]) for (const d of removePart(this.bp, p.uid)) this.host.stash.give(d);
+      this.guide = { idea, step: 0, uids: [] };
+      this.afterChange();
+    };
+    wrap.append(
+      h('div', { class: 'muted' }, first ? 'First time in the lab? Here is one idea. You can build anything, though!' : 'An idea'),
+      h('h2', {}, `💡 ${idea.title}`),
+      h('p', {}, idea.pitch),
+      h('div', { class: 'idea-list' }, ...rows),
+      h(
+        'div',
+        { class: 'row' },
+        btn(this.bp.parts.length ? 'Clear bench & guide me' : 'Guide me', start, 'go'),
+        btn('I will figure it out', close, 'small'),
+      ),
+    );
     this.root.append(wrap);
   }
 
