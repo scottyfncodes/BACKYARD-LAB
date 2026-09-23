@@ -137,12 +137,16 @@ export function socketUp(def: PartDef, socketId: string): Vector3 {
 
 function penetrationAgainst(bp: Blueprint, def: PartDef, at: Pose, skip: Set<number>): { uid: number; depth: number } {
   const mine = partOBBs(def, at, 0.004);
+  const mb = obbBounds(mine);
   let worst = { uid: -1, depth: 0 };
   for (const other of bp.parts) {
     if (skip.has(other.uid)) continue;
     const odef = PART_MAP[other.def];
     if (!odef || odef.link) continue;
     const theirs = partOBBs(odef, partPose(other), 0.004);
+    // Cheap box test first; most parts are nowhere near each other.
+    const tb = obbBounds(theirs);
+    if (tb.min.x > mb.max.x || tb.max.x < mb.min.x || tb.min.y > mb.max.y || tb.max.y < mb.min.y || tb.min.z > mb.max.z || tb.max.z < mb.min.z) continue;
     for (const a of mine) for (const b of theirs) {
       const d = obbPenetration(a, b);
       if (d > worst.depth) worst = { uid: other.uid, depth: d };

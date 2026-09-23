@@ -22,7 +22,7 @@ npm run dev        # http://localhost:5173
 | Drop / throw | `Q` / `F` | Buttons |
 | Run machines / reset | `G` / `R` | ▶ GO / ⟲ RESET |
 | Camera, drive/walk, RC switch, replay | `C`, `Tab`, `X`, `V` | Buttons |
-| Workbench | Pick a part: its ghost hovers over the bench. Arrow keys / mouse aim it, `Q`/`E` spin, `Z`/`X` tilt, `F` mount side, `Enter` or click to place. Select a placed part and press `M` to move it | Tap a part in the tray: its ghost hovers over the bench. D-pad aims it, ↺ ↻ spin it flat, ⤵ ⤴ tilt it up (ramps!), ✔ PLACE locks it in. Tap a placed part twice (or ✥ Move) to pick it back up, along with everything attached to it |
+| Workbench | Pick a part: its ghost hovers over the bench. Parts click onto invisible Lego-style lock points (shown as dots). Arrow keys / mouse jump between them, `Q`/`E` spin 45°, `Z`/`X` tilt 45°, `F` mount side, `Enter` or click to place. Select a placed part and press `M` to move it | Tap a part in the tray: its ghost hovers over the bench. Dots show where it can click on, Lego-style. D-pad jumps between them (or tap one), ↺ ↻ spin 45°, ⤵ ⤴ tilt 45° (ramps!), ✔ PLACE locks it in. Tap a placed part twice (or ✥ Move) to pick it back up, along with everything attached to it |
 
 Add `?q=low` to the URL for low graphics (no shadows or grass).
 
