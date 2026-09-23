@@ -1242,6 +1242,14 @@ export class Game {
       subject: subj,
       subjectVel: vel,
       heading,
+      clip: (look, cam) => {
+        const d = cam.clone().sub(look);
+        const len = d.length();
+        if (len < 0.3) return cam;
+        d.divideScalar(len);
+        const hit = this.sim.physics.raycast(look, d, len, groups(0xffff, GROUP.STATIC));
+        return hit ? look.clone().addScaledVector(d, Math.max(0.3, hit.dist - 0.25)) : cam;
+      },
       focus: target ? toV(target.rb.translation()) : this.projectId ? new THREE.Vector3(...PROJECT_MAP[this.projectId].focus) : null,
     });
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.r.camera.quaternion);

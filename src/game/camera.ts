@@ -10,6 +10,8 @@ export interface CamContext {
   subjectVel: THREE.Vector3;
   heading: THREE.Vector3 | null;
   focus: THREE.Vector3 | null;
+  /** Pull a third-person camera in front of any wall between it and what it watches. */
+  clip?: (look: THREE.Vector3, cam: THREE.Vector3) => THREE.Vector3;
 }
 
 const ease = (t: number) => t * t * (3 - 2 * t);
@@ -98,6 +100,11 @@ export class CameraDirector {
         q = this.lookQuat(p, this.intro.look);
         break;
       }
+    }
+    if (c.clip && this.mode !== 'eyes' && this.mode !== 'intro') {
+      const look = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+      const target = this.mode === 'free' || this.mode === 'bench' ? this.orbit.center : p.clone().addScaledVector(look, p.distanceTo(subject));
+      p = c.clip(target, p);
     }
     if (this.blend < 1) {
       this.blend = Math.min(1, this.blend + dt / this.blendTime);
