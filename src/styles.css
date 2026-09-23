@@ -451,3 +451,10 @@ html, body {
   .build-status { bottom: calc(108px + var(--safe-b)); }
   .thought { bottom: calc(70px + var(--safe-b)); font-size: 15px; }
 }
+
+/* While building, thoughts float near the top so they never cover the tray or tools. */
+body.building .thought { top: calc(76px + var(--safe-t)); bottom: auto; }
+body.building .thought::after { display: none; }
+@media (max-width: 600px) {
+  .build-tools .btn { min-height: 44px; font-size: 14px; padding: 6px 10px; }
+}

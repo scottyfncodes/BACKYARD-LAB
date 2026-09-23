@@ -695,11 +695,13 @@ export class Game {
     this.input.reset();
     this.setHudVisible(false);
     this.thought.hide();
+    document.body.classList.add('building');
     this.build.enter(this.bench);
   }
 
   private exitBuild(bp: Blueprint) {
     this.bench = bp;
+    document.body.classList.remove('building');
     this.build.exit();
     this.input.enabled = true;
     this.enterExplore();
@@ -707,6 +709,7 @@ export class Game {
   }
 
   private benchDone(bp: Blueprint) {
+    document.body.classList.remove('building');
     this.build.exit();
     this.input.enabled = true;
     this.bench = newBlueprint();
