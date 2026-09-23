@@ -142,7 +142,10 @@ export class BuildMode {
   private tools!: HTMLElement;
   private stats!: HTMLElement;
   private topBtns!: HTMLElement;
-  private pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number; grab?: boolean }>();
+  private pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number; grab?: boolean; gx?: number; gy?: number }>();
+  /** A finger down on a tray slot: a tap picks the part, a swipe up drags it out, sideways scrolls. */
+  private trayPress: { id: string; pointerId: number; sx: number; sy: number; x: number; t: number; scroll0: number; scrolling: boolean; v: number } | null = null;
+  private trayFling = 0;
   private pinch: { d: number; a: number } | null = null;
   private dragFromTray = false;
   /** Screen point the held part is aimed at (moved by d-pad, taps, drags, mouse). */
@@ -526,7 +529,7 @@ export class BuildMode {
     const start = at ?? this.defaultCursor(moving);
     if (!this.snapNear(start.x, start.y, Infinity)) this.firstValidStud();
     if (d.link) this.setStatus(`Tap where one end of the ${d.name.toLowerCase()} goes`);
-    else if (this.host.hints) this.setStatus('Drag it where you want it. Let go and it clicks on.', 'good');
+    else if (this.host.hints) this.setStatus('Drag the ghost where you want it and let go, or tap a spot then tap the ghost.', 'good');
   }
 
   private tintGhost(color: number) {
@@ -743,6 +746,7 @@ export class BuildMode {
     this.cursorEl.style.left = `${s.x}px`;
     this.cursorEl.style.top = `${s.y}px`;
     this.preview();
+    if (this.guide) this.renderGuide();
   }
 
   /** After spinning / flipping: stay on this lock point if it still fits, else find a nearby one. */
@@ -1038,20 +1042,15 @@ export class BuildMode {
   }
 
   private continueOrStop(def: string) {
-    if (this.host.stash.infinite || this.host.stash.count(def) > 0) {
-      // Keep holding another one, aimed near where the last one went.
-      const prev = this.cursor;
+    // Following an idea that wants another of the same part: hand it straight over, already on the gold ring.
+    const next = this.guideStep();
+    if (next && next.part === def && !this.guideFinished && (this.host.stash.infinite || this.host.stash.count(def) > 0)) {
       this.regenStuds();
       this.refresh();
-      if ((this.guideStep() && this.guideStep()!.part !== def) || this.guideFinished) {
-        this.guideFinished = false;
-        this.clearHolding();
-        return;
-      }
       if (this.aimGuide()) return;
-      if (!(prev && this.snapNear(prev.x, prev.y, 200))) this.firstValidStud();
-      return;
     }
+    // Otherwise empty hands: nothing lands on the bench by accident.
+    this.guideFinished = false;
     this.clearHolding();
   }
 
@@ -1104,22 +1103,90 @@ export class BuildMode {
   private trayDown(e: PointerEvent, id: string) {
     e.stopPropagation();
     if (this.testing) return;
-    if (this.holding?.def === id) {
-      this.clearHolding();
-      return;
+    // Nothing happens yet: wait to see if this is a tap, a drag out, or a scroll.
+    cancelAnimationFrame(this.trayFling);
+    this.trayPress = { id, pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, t: performance.now(), scroll0: this.tray.scrollLeft, scrolling: false, v: 0 };
+  }
+
+  /** Let go of a tray scroll: keep gliding for a moment. */
+  private flingTray(v: number) {
+    const step = () => {
+      if (Math.abs(v) < 0.02) return;
+      this.tray.scrollLeft -= v * 16;
+      v *= 0.94;
+      this.trayFling = requestAnimationFrame(step);
+    };
+    this.trayFling = requestAnimationFrame(step);
+  }
+
+  private trayTap(id: string) {
+    if (this.holding?.def === id && !this.holding.moving) this.clearHolding();
+    else this.startHolding(id);
+  }
+
+  /** Is this screen point on (or right next to) the held ghost? */
+  private onGhost(x: number, y: number): boolean {
+    if (!this.holding) return false;
+    if (this.cursor && Math.hypot(x - this.cursor.x, y - this.cursor.y) < 60) return true;
+    if (!this.ghost?.visible) return false;
+    const box = new THREE.Box3().setFromObject(this.ghost);
+    const rect = this.host.r.canvas.getBoundingClientRect();
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < 8; i++) {
+      const c = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(this.host.r.camera);
+      const sx = rect.left + ((c.x + 1) / 2) * rect.width;
+      const sy = rect.top + ((1 - c.y) / 2) * rect.height;
+      [x0, y0, x1, y1] = [Math.min(x0, sx), Math.min(y0, sy), Math.max(x1, sx), Math.max(y1, sy)];
     }
-    this.startHolding(id);
-    if (!this.holding) return;
-    this.dragFromTray = true;
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now() });
+    const pad = 24;
+    return x >= x0 - pad && x <= x1 + pad && y >= y0 - pad && y <= y1 + pad;
+  }
+
+  /**
+   * Snap to the lock point under the finger: whatever part (or bench spot)
+   * the finger is actually over, the closest click-on point on that face.
+   * While following an idea, the gold ring pulls the part in from a distance.
+   */
+  private snapAt(x: number, y: number): boolean {
+    const hit = this.pick(x, y);
+    if (this.isGuideSpot(0) && this.studUsable(0)) {
+      const g = this.toScreen(this.studs[0].point);
+      const onTarget = hit && hit.uid !== null && hit.uid === this.studs[0].part;
+      if (Math.hypot(g.x - x, g.y - y) < 120 || onTarget) {
+        if (this.aim !== 0) this.aimAt(0);
+        return true;
+      }
+    }
+    if (hit && !(hit.uid !== null && hit.link)) {
+      const cands: { i: number; d: number }[] = [];
+      this.studs.forEach((st, i) => {
+        if (hit.uid === null ? st.part !== null : st.part !== hit.uid) return;
+        const d = st.point.distanceTo(hit.point);
+        if (st.special && st.special !== 'guide') {
+          if (d < 0.12) cands.push({ i, d: d - 0.08 }); // joint points (motor shafts, hinges) are sticky
+        } else if (hit.uid === null || st.normal.dot(hit.normal) > 0.5) cands.push({ i, d });
+      });
+      cands.sort((a, b) => a.d - b.d);
+      for (const c of cands.slice(0, 12)) {
+        if (c.d > 0.3) break;
+        if (this.studUsable(c.i)) {
+          if (c.i !== this.aim) this.aimAt(c.i);
+          return true;
+        }
+      }
+    }
+    return this.snapNear(x, y, 110);
   }
 
   private pDown(e: PointerEvent) {
     if (this.testing && e.pointerType !== 'mouse') {
       // allow orbiting while testing
     }
-    // With a part in hand, one finger drags the part; two fingers move the view.
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now(), grab: !!this.holding && e.pointerType !== 'mouse' && this.pointers.size === 0 });
+    // With a part in hand, a finger on the ghost drags it; anywhere else turns the view.
+    const grab = !!this.holding && e.pointerType !== 'mouse' && this.pointers.size === 0 && this.onGhost(e.clientX, e.clientY);
+    const c = this.cursor ?? { x: e.clientX, y: e.clientY };
+    // Keep the part where it was relative to the finger (lifted a little so the finger does not hide it).
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now(), grab, gx: c.x - e.clientX, gy: Math.min(c.y - e.clientY, 0) - 40 });
     if (this.pointers.size === 2) for (const q of this.pointers.values()) q.grab = false;
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
@@ -1140,9 +1207,31 @@ export class BuildMode {
 
   private pMove(e: PointerEvent) {
     if (!this.active) return;
+    const tp = this.trayPress;
+    if (tp && tp.pointerId === e.pointerId) {
+      const tdx = e.clientX - tp.sx;
+      const tdy = e.clientY - tp.sy;
+      if (!tp.scrolling && Math.abs(tdx) > 10 && Math.abs(tdx) > Math.abs(tdy) * 1.2) tp.scrolling = true;
+      if (tp.scrolling) {
+        // Sideways: scroll the tray.
+        const now = performance.now();
+        tp.v = (e.clientX - tp.x) / Math.max(1, now - tp.t);
+        tp.x = e.clientX;
+        tp.t = now;
+        this.tray.scrollLeft = tp.scroll0 - tdx;
+        return;
+      }
+      if (-tdy < 16 || -tdy < Math.abs(tdx) * 0.8) return;
+      // Swiped up out of the tray: pick it up and drag it.
+      this.trayPress = null;
+      if (this.holding?.def !== tp.id || this.holding.moving) this.startHolding(tp.id);
+      if (!this.holding) return;
+      this.dragFromTray = true;
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: tp.sx, sy: tp.sy, t: 0 });
+    }
     const p = this.pointers.get(e.pointerId);
     if (e.pointerType === 'mouse' && !p) {
-      if (this.holding && (e.target as HTMLElement) === this.host.r.canvas) this.snapNear(e.clientX, e.clientY, 60);
+      if (this.holding && (e.target as HTMLElement) === this.host.r.canvas) this.snapAt(e.clientX, e.clientY);
       return;
     }
     if (!p) return;
@@ -1163,10 +1252,11 @@ export class BuildMode {
       this.pinch.a = ang;
       return;
     }
-    const oy = this.touchOffset(e);
-    // Dragging the ghost itself (from the tray, or grabbed near the aim point) moves it.
+    // Dragging the ghost itself (out of the tray, or grabbed on the bench) moves it.
     if (this.holding && (this.dragFromTray || e.pointerType === 'mouse' || p.grab)) {
-      if (!this.overTray(e.clientY)) this.snapNear(e.clientX, e.clientY + oy, 110);
+      const ox = p.grab ? p.gx ?? 0 : 0;
+      const oy = p.grab ? p.gy ?? 0 : this.touchOffset(e);
+      if (!this.overTray(e.clientY)) this.snapAt(e.clientX + ox, e.clientY + oy);
       return;
     }
     // Orbit
@@ -1180,6 +1270,13 @@ export class BuildMode {
 
   private pUp(e: PointerEvent) {
     if (!this.active) return;
+    const tp = this.trayPress;
+    if (tp && tp.pointerId === e.pointerId) {
+      this.trayPress = null;
+      if (tp.scrolling) this.flingTray(performance.now() - tp.t < 80 ? tp.v : 0);
+      else if (e.type !== 'pointercancel' && Math.hypot(e.clientX - tp.sx, e.clientY - tp.sy) < 12) this.trayTap(tp.id);
+      return;
+    }
     const p = this.pointers.get(e.pointerId);
     this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
@@ -1188,8 +1285,8 @@ export class BuildMode {
     const tap = moved < 10 && performance.now() - p.t < 450;
     if (this.dragFromTray) {
       this.dragFromTray = false;
-      // Dropped over the tray: never mind. Anywhere else: it clicks on.
-      if (!tap && this.holding) {
+      // Dropped back on the tray: never mind. Anywhere else: it clicks on.
+      if (this.holding) {
         if (this.overTray(e.clientY)) this.clearHolding();
         else this.lockIn();
       }
@@ -1203,13 +1300,13 @@ export class BuildMode {
     if (this.testing || !tap) return;
     if ((e.target as HTMLElement) !== this.host.r.canvas) return;
     if (this.holding) {
-      // Tap the ghost (or click, with a mouse) to lock it in; tap elsewhere to aim there.
-      // Tap a spot: it clicks on there. (In fine-tune mode a tap only aims.)
-      const onGhost = this.cursor && Math.hypot(e.clientX - this.cursor.x, e.clientY - this.cursor.y) < 40;
-      if (onGhost || e.pointerType === 'mouse') this.lockIn();
-      else if (this.snapNear(e.clientX, e.clientY, 120)) {
-        if (!this.fineTune && !getPart(this.holding.def).link) this.lockIn();
-        else if (getPart(this.holding.def).link) this.lockIn();
+      const link = !!getPart(this.holding.def).link;
+      // Tap the ghost (or click, with a mouse) to lock it in.
+      if (e.pointerType === 'mouse' || (!link && this.onGhost(e.clientX, e.clientY))) this.lockIn();
+      // Tap somewhere else: the ghost moves there and waits. Ropes tie on where you tap.
+      else if (this.snapAt(e.clientX, e.clientY)) {
+        if (link) this.lockIn();
+        else if (!this.guide) this.setStatus('Looks good? Tap the ghost or ✔ PLACE', 'good');
       } else this.host.audio.play('error');
       return;
     }
@@ -1388,7 +1485,8 @@ export class BuildMode {
     const m = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.016, 0.016, 0.006, 10), M.basic(0xffffff, 0.55), studs.length);
     const mtx = new THREE.Matrix4();
     studs.forEach((st, i) => {
-      const scale = st.special === 'guide' ? 3 : 1;
+      // Following an idea: only the gold ring shows, so there is one obvious place to go.
+      const scale = st.special === 'guide' ? 3 : studs[0]?.special === 'guide' ? 0 : 1;
       mtx.compose(st.point.clone().addScaledVector(st.normal, 0.004), new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), st.normal), new THREE.Vector3(scale, 1, scale));
       m.setMatrixAt(i, mtx);
     });
@@ -1412,7 +1510,7 @@ export class BuildMode {
       h('div', { class: 'guide-head' }, `💡 ${g.idea.title} · step ${g.step + 1} of ${g.idea.steps.length}`),
       h('div', { class: 'guide-say' }, step.say),
       have
-        ? h('div', { class: 'guide-part' }, this.holding ? 'Drop it on the gold ring ✨' : `Tap the ${def.name} in the tray below 👇`)
+        ? h('div', { class: 'guide-part' }, !this.holding ? `Tap the ${def.name} in the tray below 👇` : this.isGuideSpot(this.aim) ? 'It is on the gold ring. Tap ✔ PLACE ✨' : 'Drag it back to the gold ring ✨')
         : h('div', { class: 'guide-part missing' }, `You need a ${def.name}. Look in ${WHERE[step.part] ?? 'the yard'}, then bring it to the lab.`),
       btn('Stop guide', () => {
         this.guide = null;

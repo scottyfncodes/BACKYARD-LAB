@@ -355,7 +355,7 @@ html, body {
   position: relative;
   padding: 2px 4px 5px;
   box-shadow: var(--shadow);
-  touch-action: pan-x;
+  touch-action: none; /* the game decides: tap, drag out, or scroll the tray */
 }
 .slot img { width: 70px; height: 70px; object-fit: contain; pointer-events: none; }
 .slot .name { font-size: 11px; font-weight: 900; text-align: center; line-height: 1.05; pointer-events: none; }
