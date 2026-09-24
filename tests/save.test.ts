@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Builder } from '../src/sim/blueprint';
-import { completeProject, defaultSave, discover, isUnlocked, loadSave, parseSave, sandboxParts, SAVE_KEY, writeSave } from '../src/game/save';
+import { PARTS } from '../src/data/parts';
+import { completeProject, defaultSave, discover, isUnlocked, loadSave, parseSave, revealHint, sandboxParts, SAVE_KEY, writeSave } from '../src/game/save';
 
 class MemStore {
   data = new Map<string, string>();
@@ -23,7 +24,15 @@ describe('save / load', () => {
     const c = b.free('crate');
     b.on('motor', 'base', c, [0, 0.2, 0], [0, 1, 0]);
     s.creations.push({ name: 'Zoomer', bp: b.bp, savedAt: 1 });
-    s.session = { mode: 'project', project: 'kite_in_tree', bench: b.bp, machines: [{ bp: b.bp, placement: { pos: [1, 0.2, 3], yaw: 0.5 } }], stash: { rope: 2, plank: 1 } };
+    revealHint(s, 'kite_in_tree');
+    s.session = {
+      mode: 'project',
+      project: 'kite_in_tree',
+      bench: b.bp,
+      machines: [{ bp: b.bp, placement: { pos: [1, 0.2, 3], yaw: 0.5 } }],
+      stash: { rope: 2, plank: 1 },
+      spot: { placement: { pos: [9, 0.3, 8], yaw: 1 }, player: [10, 0, 9], yaw: 2 },
+    };
     expect(writeSave(s, store)).toBe(true);
     const back = loadSave(store);
     expect(back).toEqual(s);
@@ -40,6 +49,7 @@ describe('save / load', () => {
         completed: { ball_over_fence: { bestTime: 'fast', bonuses: [1, 'x'] }, fake: {} },
         settings: { sound: 'loud', sensitivity: 900 },
         session: { mode: 'project', project: 'moon', machines: [] },
+        hintsSeen: { ball_over_fence: 99, moon: 2, kite_in_tree: 'lots' },
         creations: [{ name: 'x', bp: { parts: 'lol' } }],
       }),
     );
@@ -50,6 +60,9 @@ describe('save / load', () => {
     expect(evil.settings.sensitivity).toBe(1);
     expect(evil.session).toBeNull();
     expect(evil.creations).toHaveLength(0);
+    expect(evil.hintsSeen).toEqual({ ball_over_fence: 4 });
+    const badSpot = parseSave(JSON.stringify({ v: 1, session: { mode: 'sandbox', machines: [], spot: { placement: { pos: [1, 'x', 2] }, player: [0, 0, 0] } } }));
+    expect(badSpot.session?.spot).toBeNull();
   });
 
   it('keeps working when storage throws (private mode)', () => {
@@ -74,7 +87,7 @@ describe('progression', () => {
     expect(isUnlocked(s, 'kite_in_tree')).toBe(false);
     expect(s.sandbox).toBe(false);
     const u = completeProject(s, 'ball_over_fence', 200, []);
-    expect(u.projects).toEqual(['kite_in_tree', 'dog_ball']);
+    expect(u.projects).toEqual(['dog_ball', 'kite_in_tree']);
     expect(u.sandbox).toBe(true);
     expect(isUnlocked(s, 'kite_in_tree')).toBe(true);
     // Replaying keeps the best time and accumulates bonuses.
@@ -84,12 +97,22 @@ describe('progression', () => {
     expect(s.completed.ball_over_fence.bonuses.sort()).toEqual(['hands_off', 'quick']);
   });
 
-  it('the sandbox offers exactly the junk you have discovered', () => {
+  it('the sandbox offers the whole library; props are never building material', () => {
     const s = defaultSave();
     expect(discover(s, 'rope')).toBe(true);
     expect(discover(s, 'rope')).toBe(false);
-    expect(discover(s, 'playground_ball')).toBe(false); // props are not building material
-    discover(s, 'motor');
-    expect(sandboxParts(s).sort()).toEqual(['motor', 'rope']);
+    expect(discover(s, 'playground_ball')).toBe(false);
+    expect(sandboxParts().sort()).toEqual(PARTS.filter((p) => p.buildable).map((p) => p.id).sort());
+    expect(sandboxParts()).not.toContain('playground_ball');
+  });
+
+  it('hints are revealed one at a time, only when asked, and stop at four', () => {
+    const s = defaultSave();
+    expect(s.hintsSeen.ball_over_fence ?? 0).toBe(0);
+    expect(revealHint(s, 'ball_over_fence')).toBe(1);
+    expect(revealHint(s, 'ball_over_fence')).toBe(2);
+    for (let i = 0; i < 5; i++) revealHint(s, 'ball_over_fence');
+    expect(s.hintsSeen.ball_over_fence).toBe(4);
+    expect(s.hintsSeen.kite_in_tree).toBeUndefined();
   });
 });

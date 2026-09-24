@@ -18,7 +18,7 @@ export interface Item {
   tag?: string;
   spawn: SpawnDef;
   touched: boolean;
-  snag?: { anchor: Vector3; local: Vector3; breakForce: number; over: number; tie?: boolean; rest?: number };
+  snag?: { anchor: Vector3; local: Vector3; breakForce: number; over: number; tie?: boolean; rest?: number; peak?: number };
 }
 
 export interface SimInput {
@@ -472,6 +472,8 @@ export class Simulation implements MachineHost {
       const F = d.multiplyScalar(((dl - slack) / Math.max(dl, 1e-6)) * k).sub(v.multiplyScalar(criticalDamping(k, m, 0.9)));
       // Measure the pull ignoring the item's own weight.
       const pull = F.clone().add(new Vector3(0, -m * 9.81, 0)).length();
+      // How hard it has been tugged, for the test readout (ignores the settling second).
+      if (this.time > 1) s.peak = Math.max(s.peak ?? 0, pull / s.breakForce);
       // Give snagged things a moment to settle before they can tear loose.
       if (pull > s.breakForce && this.time > 1) {
         s.over += dt;

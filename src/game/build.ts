@@ -8,6 +8,7 @@ import {
   commitPlacement,
   computeAttach,
   findPart,
+  liftOntoBench,
   linkWorldEnds,
   partPose,
   placeFree,
@@ -23,10 +24,10 @@ import { partMesh } from '../render/parts';
 import type { Renderer } from '../render/renderer';
 import { partThumb } from '../render/thumbs';
 import { BlueprintView } from '../render/views';
-import { btn, h, type Thought, type Toasts } from '../ui/dom';
+import { btn, buzz, h, type Thought, type Toasts } from '../ui/dom';
 import type { CameraDirector } from './camera';
 import { generateStuds, rankInDirection, type Stud } from './studs';
-import { WHERE, type Idea } from '../data/ideas';
+import type { Idea } from '../data/ideas';
 import { transformPoint } from '../sim/geom';
 
 export interface Stash {
@@ -48,10 +49,18 @@ export interface BuildHost {
   benchOrigin: THREE.Vector3;
   sandbox: boolean;
   hints: boolean;
+  /** Carry the machine out and pick a spot for it. */
   onDone(bp: Blueprint): void;
+  /** Put it straight back where it was last tested, and test it. */
+  onTestOut(bp: Blueprint): void;
+  /** There is a spot to put it back to. */
+  hasSpot(): boolean;
   onExit(bp: Blueprint): void;
+  /** Quick try right here on the bench. */
   onTest(bp: Blueprint): void;
   onStopTest(): void;
+  /** Open the hints / "what are you thinking?" card, if this project has one. */
+  onHints: (() => void) | null;
   onChange(bp: Blueprint): void;
   creations(): { name: string; bp: Blueprint }[];
   saveCreation(bp: Blueprint): void;
@@ -142,6 +151,10 @@ export class BuildMode {
   private tools!: HTMLElement;
   private stats!: HTMLElement;
   private topBtns!: HTMLElement;
+  private goBox!: HTMLElement;
+  private trayLabel!: HTMLElement;
+  /** Expanding rings where parts just clicked together. */
+  private rings: { mesh: THREE.Mesh; t: number }[] = [];
   private pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number; grab?: boolean; gx?: number; gy?: number }>();
   /** A finger down on a tray slot: a tap picks the part, a swipe up drags it out, sideways scrolls. */
   private trayPress: { id: string; pointerId: number; sx: number; sy: number; x: number; t: number; scroll0: number; scrolling: boolean; v: number } | null = null;
@@ -151,6 +164,8 @@ export class BuildMode {
   /** Screen point the held part is aimed at (moved by d-pad, taps, drags, mouse). */
   private cursor: { x: number; y: number } | null = null;
   private cursorEl!: HTMLElement;
+  /** Says what the held part will connect to, right next to the finger. */
+  private cursorTag!: HTMLElement;
   private dpad!: HTMLElement;
   private placeBar!: HTMLElement;
   private hoverLift = new THREE.Vector3();
@@ -202,7 +217,7 @@ export class BuildMode {
     this.on(window, 'keydown', (e) => this.key((e as KeyboardEvent).key.toLowerCase()));
     this.on(canvas, 'contextmenu', (e) => e.preventDefault());
     if (this.host.hints && bp.parts.length === 0) {
-      setTimeout(() => this.active && this.bp.parts.length === 0 && this.host.thought.say('My lab! Drag something from the shelf onto the bench.', 5000), 700);
+      setTimeout(() => this.active && this.bp.parts.length === 0 && this.host.thought.say('My parts bin! Drag something up onto the bench.', 5000), 700);
     }
     this.refresh();
   }
@@ -238,12 +253,15 @@ export class BuildMode {
     this.dpad = h('div', { class: 'dpad hidden' });
     this.placeBar = h('div', { class: 'place-bar hidden' });
     this.cursorEl = h('div', { class: 'build-cursor hidden' });
+    this.cursorTag = h('div', { class: 'cursor-tag hidden' });
     this.guideEl = h('div', { class: 'guide-card hidden' });
     this.guideEl.addEventListener('pointerdown', (e) => e.stopPropagation());
-    for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar]) {
+    this.goBox = h('div', { class: 'bench-go hidden' });
+    this.trayLabel = h('div', { class: 'tray-label' });
+    for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar, this.goBox]) {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
-    this.root.append(top, this.tray, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.cursorEl, this.guideEl);
+    this.root.append(top, this.tray, this.trayLabel, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.cursorEl, this.cursorTag, this.guideEl);
     this.host.ui.appendChild(this.root);
   }
 
@@ -283,23 +301,39 @@ export class BuildMode {
         b.push(btn('💾', () => this.saveCreation(), 'small'));
         b.push(btn('📂', () => this.loadMenu(), 'small'));
       }
-      if (this.host.ideas().length && !this.guide) b.push(btn('💡 Idea', () => this.showIdea(), 'small'));
-      if (this.bp.parts.length) b.push(btn('▶ TEST', () => this.test(), 'blue'));
-      if (this.bp.parts.length) b.push(btn('✔ DONE', () => this.done(), 'primary'));
+      const hints = this.host.onHints;
+      if (hints && !this.guide) b.push(btn('💡', () => hints(), 'small hint-btn'));
       b.push(btn('✕', () => this.leave(), 'small'));
     }
     this.topBtns.replaceChildren(...b);
+    this.renderGo();
+  }
+
+  /** The big TEST button: always one tap from "I have an idea" to "let's see". */
+  private renderGo() {
+    const show = !this.testing && !this.holding && this.bp.parts.length > 0;
+    this.goBox.classList.toggle('hidden', !show);
+    if (!show) return;
+    const b: HTMLElement[] = [btn('⚙ Try it here', () => this.test(), 'small')];
+    if (this.host.hasSpot()) {
+      b.push(btn('📍 New spot', () => this.done(), 'small'));
+      b.push(btn('▶ TEST', () => this.testOut(), 'go test-btn'));
+    } else b.push(btn('📍 TAKE IT OUT', () => this.done(), 'go test-btn'));
+    this.goBox.replaceChildren(...b);
   }
 
   private renderTray() {
     if (this.testing) {
       this.tray.classList.add('hidden');
+      this.trayLabel.classList.add('hidden');
       return;
     }
     this.tray.classList.remove('hidden');
     const list = this.host.stash.list();
+    this.trayLabel.classList.toggle('hidden', this.testing);
+    this.trayLabel.textContent = this.host.stash.infinite ? `EVERY PART · ${list.length} KINDS · ∞` : `PARTS BIN · ${list.length} AVAILABLE`;
     if (!list.length) {
-      this.tray.replaceChildren(h('div', { class: 'empty-msg' }, 'The shelf is empty. Go find some junk and bring it here!'));
+      this.tray.replaceChildren(h('div', { class: 'empty-msg' }, 'The parts bin is empty. Everything is on the bench or out in the yard.'));
       return;
     }
     const order = new Map(PARTS.map((p, i) => [p.id, i]));
@@ -326,6 +360,7 @@ export class BuildMode {
     this.dpad.classList.toggle('hidden', !holding || !this.fineTune);
     this.placeBar.classList.toggle('hidden', !holding);
     this.cursorEl.classList.toggle('hidden', !holding);
+    this.cursorTag.classList.toggle('hidden', !holding);
     if (!holding) return;
     const def = getPart(this.holding!.def);
     const step = (dx: number, dy: number) => () => this.nudge(dx, dy);
@@ -527,9 +562,11 @@ export class BuildMode {
     this.refresh();
     if (this.aimGuide()) return;
     const start = at ?? this.defaultCursor(moving);
-    if (!this.snapNear(start.x, start.y, Infinity)) this.firstValidStud();
+    // A new part wants to join the machine: aim it at the machine first, the bare bench only if nothing fits.
+    const onMachine = !moving && !at && this.bp.parts.length > 0 && this.bestMachineStud(start);
+    if (!onMachine && !this.snapNear(start.x, start.y, Infinity)) this.firstValidStud();
     if (d.link) this.setStatus(`Tap where one end of the ${d.name.toLowerCase()} goes`);
-    else if (this.host.hints) this.setStatus('Drag the ghost where you want it and let go, or tap a spot then tap the ghost.', 'good');
+    else if (this.host.hints) this.setStatus('Drag it where it goes, then ✔ PLACE', 'good');
   }
 
   private tintGhost(color: number) {
@@ -547,10 +584,9 @@ export class BuildMode {
     let at: THREE.Vector3;
     if (moving) at = moving.oldRoot.p.clone();
     else if (this.bp.parts.length) {
+      // Stack it on top of the machine, in the middle: the most natural first guess, and a steady one.
       const b = blueprintBounds(this.bp);
-      // Aim at the middle of the last thing placed: always somewhere solid.
-      const last = this.bp.parts.filter((p) => !getPart(p.def).link).pop();
-      at = last ? partPose(last).p : new THREE.Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2);
+      at = new THREE.Vector3((b.min.x + b.max.x) / 2, b.max.y, (b.min.z + b.max.z) / 2);
     } else at = new THREE.Vector3(0, 0, 0);
     return this.toScreen(at);
   }
@@ -646,8 +682,8 @@ export class BuildMode {
       }
     }
     if (!best) return this.placeWith(st, h.socket, h.spin, h.tilt);
-    best.pl.snapped = best.pl.snapped;
-    (best.pl as Placement & { auto?: { socket?: string; spin: number } }).auto = { socket: best.socket, spin: best.spin };
+    (best.pl as Placement & { auto?: { socket?: string; spin: number }; score?: number }).auto = { socket: best.socket, spin: best.spin };
+    (best.pl as Placement & { score?: number }).score = best.score;
     return best.pl;
   }
 
@@ -659,10 +695,12 @@ export class BuildMode {
     if (getPart(h.def).link) pl = null;
     else if (h.manual) pl = this.placeWith(st, h.socket, h.spin, h.tilt);
     else pl = this.autoPlacement(st);
-    // Nothing is allowed to sink through the bench top.
+    // Hanging below the bench top is fine when it's attached to something: the machine gets lifted up.
+    // A part set loose on the bench still has to sit on it.
     if (pl && pl.valid && !getPart(h.def).link) {
       const low = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: h.def, p: [pl.pose.p.x, pl.pose.p.y, pl.pose.p.z], q: [pl.pose.q.x, pl.pose.q.y, pl.pose.q.z, pl.pose.q.w] }], links: [] }).min.y;
-      if (low < -0.01) pl = { ...pl, valid: false, reason: 'That would go through the bench' };
+      if (low < -0.01 && !pl.conn) pl = { ...pl, valid: false, reason: 'That would go through the bench' };
+      else if (low < -0.01) (pl as Placement & { lifts?: boolean }).lifts = true;
     }
     this.placeCache.set(i, pl);
     return pl;
@@ -712,8 +750,9 @@ export class BuildMode {
   }
 
   /** Snap to the usable lock point nearest a screen position. */
-  private snapNear(x: number, y: number, maxPx = 90): boolean {
+  private snapNear(x: number, y: number, maxPx = 90, partsOnly = false): boolean {
     const near = this.visibleStuds()
+      .filter((c) => !partsOnly || this.studs[c.i].part !== null)
       .map((c) => ({ i: c.i, d: Math.hypot(c.x - x, c.y - y) }))
       .filter((c) => c.d <= maxPx)
       .sort((a, b) => a.d - b.d);
@@ -726,6 +765,47 @@ export class BuildMode {
     return false;
   }
 
+  /**
+   * First guess for a new part on an existing machine: the most natural fit
+   * (wheels on sides and shafts, flat things flat) that keeps heavy parts near
+   * the middle, so the obvious build is a steady one.
+   */
+  private bestMachineStud(start: { x: number; y: number }): boolean {
+    if (getPart(this.holding!.def).link) return this.snapNear(start.x, start.y, Infinity, true);
+    const cands = this.visibleStuds()
+      .filter((c) => this.studs[c.i].part !== null)
+      .map((c) => ({ i: c.i, d: Math.hypot(c.x - start.x, c.y - start.y) }))
+      .sort((a, b) => a.d - b.d);
+    const pool = [...cands.filter((c) => this.studs[c.i].special), ...cands.filter((c) => !this.studs[c.i].special).slice(0, 36)];
+    const com = new THREE.Vector3();
+    let total = 0;
+    for (const p of this.bp.parts) {
+      const m = getPart(p.def).mass;
+      com.addScaledVector(partPose(p).p, m);
+      total += m;
+    }
+    if (total > 0) com.divideScalar(total);
+    const held = getPart(this.holding!.def);
+    const mass = held.mass;
+    // Only wheels go looking for shafts and axles by default; anything else can still be dragged onto one.
+    const wheelish = held.sockets.some((sk) => sk.joint === 'axle');
+    let best: { i: number; score: number } | null = null;
+    for (const c of pool) {
+      const pl = this.placementFor(c.i) as (Placement & { score?: number }) | null;
+      if (!pl?.valid) continue;
+      const off = Math.hypot(pl.pose.p.x - com.x, pl.pose.p.z - com.z);
+      // Build onto the frame, not onto a wheel.
+      const onto = this.studs[c.i].part !== null ? findPart(this.bp, this.studs[c.i].part!) : null;
+      const ontoWheel = !!onto && getPart(onto.def).sockets.some((sk) => sk.joint === 'axle');
+      const jointy = !!pl.conn && pl.conn.kind !== 'weld' && pl.conn.kind !== 'tether';
+      const score = (pl.score ?? 0) - off * mass * 0.5 - c.d / 400 - (ontoWheel ? 6 : 0) - (jointy && !wheelish ? 6 : 0);
+      if (!best || score > best.score) best = { i: c.i, score };
+    }
+    if (!best) return false;
+    this.aimAt(best.i, false);
+    return true;
+  }
+
   private firstValidStud() {
     for (let i = 0; i < this.studs.length; i++) if (this.studUsable(i)) return this.aimAt(i, false);
     this.aim = -1;
@@ -735,18 +815,27 @@ export class BuildMode {
   private previewCursor() {
     if (this.aim < 0 || !this.studs[this.aim]) {
       this.cursorEl.classList.add('hidden');
+      this.cursorTag.classList.add('hidden');
       if (this.ghost) this.ghost.visible = false;
-      this.setStatus('Nowhere for it to go. Try turning it or flipping it', 'bad');
+      this.view.highlight(null);
+      this.setStatus('No spot for it yet. Try turning it or flipping it', 'bad');
       return;
     }
     const s = this.toScreen(this.studs[this.aim].point);
     this.cursor = s;
     this.cursorEl.classList.remove('hidden');
+    this.cursorTag.classList.remove('hidden');
     this.cursorEl.classList.toggle('gold', this.studs[this.aim].special === 'guide');
-    this.cursorEl.style.left = `${s.x}px`;
-    this.cursorEl.style.top = `${s.y}px`;
+    this.placeCursor(s);
     this.preview();
     if (this.guide) this.renderGuide();
+  }
+
+  private placeCursor(s: { x: number; y: number }) {
+    this.cursorEl.style.left = `${s.x}px`;
+    this.cursorEl.style.top = `${s.y}px`;
+    this.cursorTag.style.left = `${s.x}px`;
+    this.cursorTag.style.top = `${s.y}px`;
   }
 
   /** After spinning / flipping: stay on this lock point if it still fits, else find a nearby one. */
@@ -778,6 +867,7 @@ export class BuildMode {
     this.ghost = null;
     this.linkLine?.removeFromParent();
     this.linkLine = null;
+    this.view?.highlight(null);
     this.setStatus(null);
     if (refresh) this.refresh();
   }
@@ -943,16 +1033,29 @@ export class BuildMode {
     this.ghost.quaternion.copy(pl.pose.q);
     // Hover just off the spot it will land on.
     this.hoverLift.copy(pl.conn && pl.conn.kind !== 'tether' ? pl.pose.p.clone().sub(pl.conn.anchor).normalize() : new THREE.Vector3(0, 1, 0));
-    const color = pl.valid ? (pl.conn && pl.conn.kind !== 'weld' ? 0x40c0ff : 0x40ff80) : 0xff4030;
+    const joint = !!pl.conn && pl.conn.kind !== 'weld';
+    const color = pl.valid ? (joint ? 0x40c0ff : 0x40ff80) : 0xff4030;
     this.tintGhost(color);
-    if (!pl.valid) this.setStatus(pl.reason ?? 'Nope', 'bad');
-    else if (pl.conn) {
+    // Connection preview: the part it will join glows, and a tag by the finger says how.
+    this.view.highlight(pl.valid && pl.conn ? pl.conn.target : null, joint ? 0x2a9fff : 0x3fcf6a);
+    this.cursorTag.classList.toggle('joint', joint);
+    this.cursorTag.classList.toggle('nope', !pl.valid);
+    if (!pl.valid) {
+      this.setStatus(pl.reason ?? 'Doesn’t fit there', 'bad');
+      this.cursorTag.textContent = 'won’t fit';
+    } else if (pl.conn) {
       const target = getPart(findPart(this.bp, pl.conn.target)!.def).name.toLowerCase();
       const how = { weld: 'Stick it to', axle: 'Spins freely on', hinge: 'Swings on', driven: 'Driven by', tether: 'Tie it to' }[pl.conn.kind];
+      const tag = { weld: '🔩 sticks to', axle: '⟳ spins on', hinge: '↻ swings on', driven: '⚙ driven by', tether: '🎈 tied to' }[pl.conn.kind];
       const tilt = this.holding.tilt;
       const note = tilt && pl.conn.kind !== 'weld' ? ' (stays square on it)' : tilt ? ` · tilted ${tilt}°` : '';
-      this.setStatus(`${how} the ${target}${note}`, 'good');
-    } else this.setStatus(`Put it on the bench${this.holding.tilt ? ` · tilted ${this.holding.tilt}°` : ''}`, 'good');
+      const lifts = (pl as Placement & { lifts?: boolean }).lifts ? ' (lifts the machine up)' : '';
+      this.setStatus(`${how} the ${target}${note}${lifts}`, 'good');
+      this.cursorTag.textContent = `${tag} ${target}`;
+    } else {
+      this.setStatus(`Put it on the bench${this.holding.tilt ? ` · tilted ${this.holding.tilt}°` : ''}`, 'good');
+      this.cursorTag.textContent = 'on the bench';
+    }
   }
 
   private previewLink(def: PartDef) {
@@ -961,6 +1064,7 @@ export class BuildMode {
       this.linkLine?.removeFromParent();
       this.linkLine = null;
       this.setStatus(this.linkStart ? 'Pick where the other end goes' : `Tie one end here? ✔`, 'good');
+      this.cursorTag.textContent = this.linkStart ? 'other end?' : 'tie here?';
       return;
     }
     const a = this.linkStart.point;
@@ -977,6 +1081,7 @@ export class BuildMode {
     this.linkLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
     this.linkLine.scale.set(1, Math.max(0.01, len), 1);
     this.setStatus(ok ? `${len.toFixed(2)} m — ✔ to tie it` : len > def.link!.maxSpan ? 'Too far apart' : 'Pick something else', ok ? 'good' : 'bad');
+    this.cursorTag.textContent = ok ? `${len.toFixed(1)} m` : 'too far';
   }
 
   /** ✔: click the held part onto the lock point it is aimed at. */
@@ -1008,6 +1113,7 @@ export class BuildMode {
       }
       this.host.stash.take(def.id);
       this.host.audio.play('tie');
+      buzz(15);
       this.afterChange();
       this.linkStart = null;
       this.linkLine?.removeFromParent();
@@ -1015,18 +1121,20 @@ export class BuildMode {
       this.continueOrStop(def.id);
       return;
     }
-    const pl = this.placementFor(this.aim);
+    let pl = this.placementFor(this.aim);
     if (!pl || !pl.valid) {
       this.host.audio.play('error');
-      this.setStatus(pl?.reason ?? 'That spot does not fit', 'bad');
+      this.setStatus(pl?.reason ?? 'That spot doesn’t fit', 'bad');
       return;
     }
     if (this.holding.moving) {
       const uid = this.holding.moving.uid;
       this.commitMove(pl);
-      this.host.audio.play('attach');
+      liftOntoBench(this.bp, uid);
+      this.snapFeedback(pl);
       this.afterChange();
       this.popUid(uid);
+      if (pl.conn) this.popUid(pl.conn.target, 1.08);
       this.clearHolding();
       return;
     }
@@ -1035,10 +1143,29 @@ export class BuildMode {
     const uid = commitPlacement(this.bp, pl, { mount: auto?.socket ?? this.holding.socket, spin: auto?.spin ?? this.holding.spin, tilt: auto ? 0 : this.holding.tilt });
     this.guideAdvance(uid, atGuide);
     this.host.stash.take(def.id);
-    this.host.audio.play('attach');
+    const lifted = liftOntoBench(this.bp, uid);
+    if (lifted > 0) pl = { ...pl, pose: { p: pl.pose.p.clone().setY(pl.pose.p.y + lifted), q: pl.pose.q }, conn: pl.conn && { ...pl.conn, anchor: pl.conn.anchor.clone().setY(pl.conn.anchor.y + lifted) } };
+    this.snapFeedback(pl);
     this.afterChange();
     this.popUid(uid);
+    if (pl.conn) this.popUid(pl.conn.target, 1.08);
     this.continueOrStop(def.id);
+  }
+
+  /** CLICK. A sound for what kind of joint it made, a tick you can feel, a ring where they met. */
+  private snapFeedback(pl: Placement) {
+    const joint = !!pl.conn && pl.conn.kind !== 'weld' && pl.conn.kind !== 'tether';
+    this.host.audio.play(joint ? 'ratchet' : 'attach');
+    buzz(joint ? 25 : 15);
+    const at = pl.conn ? pl.conn.anchor.clone() : new THREE.Vector3(pl.pose.p.x, 0, pl.pose.p.z);
+    const n = pl.conn && pl.conn.kind !== 'tether' ? pl.pose.p.clone().sub(pl.conn.anchor).normalize() : new THREE.Vector3(0, 1, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: joint ? 0x6cc8ff : 0xfff1a8, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.03, 0.045, 28), mat);
+    ring.position.copy(at).add(this.host.benchOrigin).addScaledVector(n.lengthSq() > 0 ? n : new THREE.Vector3(0, 1, 0), 0.006);
+    ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n.lengthSq() > 0 ? n : new THREE.Vector3(0, 1, 0));
+    ring.renderOrder = 3;
+    this.host.r.scene.add(ring);
+    this.rings.push({ mesh: ring, t: 0 });
   }
 
   private continueOrStop(def: string) {
@@ -1054,11 +1181,11 @@ export class BuildMode {
     this.clearHolding();
   }
 
-  private popUid(uid: number) {
+  private popUid(uid: number, amount = 1.25) {
     const g = this.view.parts.get(uid);
     if (g) {
-      g.scale.setScalar(1.25);
-      g.userData.popT = 0.18;
+      g.scale.setScalar(amount);
+      g.userData.popT = 0.18 * (amount - 1) * 4;
     }
   }
 
@@ -1068,7 +1195,7 @@ export class BuildMode {
     this.host.onChange(this.bp);
     if (this.host.hints && !this.guide) {
       const n = this.bp.parts.length;
-      if (n === 1) this.host.thought.say('Now stick more stuff onto it. Wheels spin on axles. Motors spin whatever is on their shaft.', 5500);
+      if (n === 1) this.host.thought.say('Now stick more stuff onto it!', 3500);
       if (n === 3 && this.bp.parts.some((p) => getPart(p.def).behaviors.some((b) => b.type === 'motor')) && !this.bp.parts.some((p) => p.def.startsWith('battery')))
         this.host.thought.say("Motors won't do anything without a battery stuck to the same machine.", 5000);
     }
@@ -1163,19 +1290,20 @@ export class BuildMode {
         if (hit.uid === null ? st.part !== null : st.part !== hit.uid) return;
         const d = st.point.distanceTo(hit.point);
         if (st.special && st.special !== 'guide') {
-          if (d < 0.12) cands.push({ i, d: d - 0.08 }); // joint points (motor shafts, hinges) are sticky
-        } else if (hit.uid === null || st.normal.dot(hit.normal) > 0.5) cands.push({ i, d });
+          if (d < 0.2) cands.push({ i, d: d - 0.1 }); // joint points (motor shafts, hinges) are sticky
+        } else if (hit.uid === null || st.normal.dot(hit.normal) > 0.35) cands.push({ i, d });
       });
       cands.sort((a, b) => a.d - b.d);
-      for (const c of cands.slice(0, 12)) {
-        if (c.d > 0.3) break;
+      for (const c of cands.slice(0, 16)) {
+        if (c.d > 0.45) break;
         if (this.studUsable(c.i)) {
           if (c.i !== this.aim) this.aimAt(c.i);
           return true;
         }
       }
     }
-    return this.snapNear(x, y, 110);
+    // Near enough counts: a generous screen radius so a fat finger still finds a spot.
+    return this.snapNear(x, y, 150);
   }
 
   private pDown(e: PointerEvent) {
@@ -1361,6 +1489,19 @@ export class BuildMode {
     this.refresh();
   }
 
+  /** ▶ TEST: straight back to where it was last tried, and go. */
+  private testOut() {
+    if (!this.bp.parts.length) return;
+    const err = validateBlueprint(this.bp).find((i) => i.severity === 'error');
+    if (err) {
+      this.host.toasts.show(err.message, 'bad');
+      this.host.audio.play('error');
+      return;
+    }
+    this.bp.name = nameMachine(this.bp);
+    this.host.onTestOut(this.bp);
+  }
+
   private done() {
     const issues = validateBlueprint(this.bp);
     const err = issues.find((i) => i.severity === 'error');
@@ -1370,7 +1511,7 @@ export class BuildMode {
       return;
     }
     const warn = issues.find((i) => i.severity === 'warn');
-    if (warn) this.host.thought.say(warn.message + '. Taking it anyway!', 3500);
+    if (warn) this.host.thought.say(`${warn.message}. Let’s see what happens anyway!`, 3500);
     this.bp.name = nameMachine(this.bp);
     this.host.onDone(this.bp);
   }
@@ -1511,7 +1652,7 @@ export class BuildMode {
       h('div', { class: 'guide-say' }, step.say),
       have
         ? h('div', { class: 'guide-part' }, !this.holding ? `Tap the ${def.name} in the tray below 👇` : this.isGuideSpot(this.aim) ? 'It is on the gold ring. Tap ✔ PLACE ✨' : 'Drag it back to the gold ring ✨')
-        : h('div', { class: 'guide-part missing' }, `You need a ${def.name}. Look in ${WHERE[step.part] ?? 'the yard'}, then bring it to the lab.`),
+        : h('div', { class: 'guide-part missing' }, `No ${def.name} left in the parts bin. Is one stuck on a machine out in the yard?`),
       btn('Stop guide', () => {
         this.guide = null;
         this.refresh();
@@ -1521,7 +1662,7 @@ export class BuildMode {
   }
 
   /** The idea card: what to build, what you have, where to find the rest. */
-  showIdea(first = false) {
+  showIdea() {
     const ideas = this.host.ideas();
     const idea = ideas[0];
     if (!idea) return;
@@ -1535,7 +1676,7 @@ export class BuildMode {
         { class: `idea-row ${ok ? 'ok' : ''}` },
         h('img', { src: partThumb(this.host.r.renderer, id), alt: '' }),
         h('span', {}, `${getPart(id).name} ${have}/${n}`),
-        h('small', {}, ok ? '✓' : `in ${WHERE[id] ?? 'the yard'}`),
+        h('small', {}, ok ? '✓' : 'used up'),
       );
     });
     const wrap = h('div', { class: 'idea-card' });
@@ -1549,7 +1690,7 @@ export class BuildMode {
       this.afterChange();
     };
     wrap.append(
-      h('div', { class: 'muted' }, first ? 'First time in the lab? Here is one idea. You can build anything, though!' : 'An idea'),
+      h('div', { class: 'muted' }, 'One way to do it. Yours can be totally different!'),
       h('h2', {}, `💡 ${idea.title}`),
       h('p', {}, idea.pitch),
       h('div', { class: 'idea-list' }, ...rows),
@@ -1557,7 +1698,7 @@ export class BuildMode {
         'div',
         { class: 'row' },
         btn(this.bp.parts.length ? 'Clear bench & guide me' : 'Guide me', start, 'go'),
-        btn('I will figure it out', close, 'small'),
+        btn('I’ll figure it out', close, 'small'),
       ),
     );
     this.root.append(wrap);
@@ -1568,8 +1709,7 @@ export class BuildMode {
     if (this.aim >= 0 && this.studs[this.aim]) {
       const sc = this.toScreen(this.studs[this.aim].point);
       this.cursor = sc;
-      this.cursorEl.style.left = `${sc.x}px`;
-      this.cursorEl.style.top = `${sc.y}px`;
+      this.placeCursor(sc);
     }
     if (this.ghost?.visible) {
       const lift = 0.05 + Math.sin(this.time * 4) * 0.012;
@@ -1577,6 +1717,17 @@ export class BuildMode {
       if (base) this.ghost.position.copy(base).addScaledVector(this.hoverLift, lift);
     }
     for (const m of this.markers.children) m.scale.setScalar(1 + Math.sin(this.time * 6) * 0.25);
+    this.rings = this.rings.filter((r) => {
+      r.t += dt;
+      const u = r.t / 0.4;
+      r.mesh.scale.setScalar(1 + u * 3);
+      (r.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.9 * (1 - u));
+      if (u < 1) return true;
+      r.mesh.removeFromParent();
+      r.mesh.geometry.dispose();
+      (r.mesh.material as THREE.Material).dispose();
+      return false;
+    });
     for (const g of this.view.parts.values()) {
       if (g.userData.popT > 0) {
         g.userData.popT -= dt;

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Audio } from '../audio/audio';
-import { getPart, PART_MAP } from '../data/parts';
+import { getPart, PART_MAP, PARTS } from '../data/parts';
 import { PROJECT_MAP, PROJECTS, STAGES, type ProjectDef } from '../data/projects';
 import { EAST_FENCE_X, inZone, LOOK_HINTS, WORLD } from '../data/world';
 import { buildEnvironment, type Environment } from '../render/environment';
@@ -14,13 +14,15 @@ import { obbBounds, partOBBs } from '../sim/geom';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
 import { GROUP, groups, RAPIER, toV } from '../sim/physics';
 import { emptyInput, PLAYER, Simulation, type Item, type SimInput } from '../sim/simulation';
+import { partThumb } from '../render/thumbs';
 import { ActionBar, btn, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
 import { BuildMode, type Stash } from './build';
 import { CameraDirector } from './camera';
+import { analyze, TestProbe, type TestReport } from './diagnostics';
 import { Input } from './input';
 import { RunJournal } from './journal';
 import { Replay } from './replay';
-import { completeProject, discover, loadSave, sandboxParts, totalBonuses, writeSave, type SaveData } from './save';
+import { completeProject, discover, loadSave, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
 
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
@@ -45,7 +47,7 @@ export class Game {
   sandbox = false;
   stash = new Map<string, number>();
   bench: Blueprint = newBlueprint();
-  carrying: { bp: Blueprint; view: BlueprintView; rot: number; placement: MachinePlacement | null; valid: boolean } | null = null;
+  carrying: { bp: Blueprint; view: BlueprintView; rot: number; placement: MachinePlacement | null; valid: boolean; spot?: TestSpot } | null = null;
   running = false;
   driving = true;
   succeeded = false;
@@ -66,7 +68,16 @@ export class Game {
   private hintTimer = 0;
   private lastLookKey = '';
   private absorbedOnce = new Set<number>();
-  private ideaOffered = new Set<string>();
+  /** Measures each test run for the results card. */
+  private probe = new TestProbe();
+  private resultsEl!: HTMLElement;
+  private hintBtn!: HTMLElement;
+  /** Where each machine in the yard was set down, and where the kid stood. */
+  private spots = new Map<number, TestSpot>();
+  /** Where the machine on the bench was last tested. */
+  private benchSpot: TestSpot | null = null;
+  private idleNudged = false;
+  private nudgePick: string | null = null;
 
   // UI
   ui: HTMLElement;
@@ -132,6 +143,8 @@ export class Game {
       // Title-screen backdrop: the prop sits where it will be.
       for (const s of project.props) this.sim.spawnItem(s);
     }
+    // The lab bench starts clear: the parts bin is on the shelf beside it.
+    if (started) for (const it of this.benchTopItems()) this.sim.removeItem(it.id);
     this.view = new WorldView(this.sim);
     this.r.scene.add(this.view.root);
     this.env.gate.rotation.y = 0;
@@ -160,7 +173,7 @@ export class Game {
         if (this.sandbox) return;
         this.stash.set(d, (this.stash.get(d) ?? 0) + 1);
       },
-      list: () => (this.sandbox ? sandboxParts(this.save).map((d) => [d, 99] as [string, number]) : [...this.stash.entries()].filter(([, n]) => n > 0)),
+      list: () => (this.sandbox ? sandboxParts().map((d) => [d, 99] as [string, number]) : [...this.stash.entries()].filter(([, n]) => n > 0)),
     };
     return {
       r: this.r,
@@ -178,6 +191,11 @@ export class Game {
         return self.save.settings.hints;
       },
       onDone: (bp: Blueprint) => this.benchDone(bp),
+      onTestOut: (bp: Blueprint) => this.benchTestOut(bp),
+      hasSpot: () => !!this.benchSpot,
+      get onHints() {
+        return self.projectId && !self.sandbox ? () => self.showHints() : null;
+      },
       onExit: (bp: Blueprint) => this.exitBuild(bp),
       onTest: (bp: Blueprint) => this.startTest(bp),
       onStopTest: () => this.stopTest(),
@@ -196,10 +214,21 @@ export class Game {
   // ================================================================== HUD
 
   private buildHud() {
-    this.projectChip = h('div', { class: 'chip' });
+    // Tap the project card any time to see the problem and the goals again.
+    this.projectChip = h('div', { class: 'chip project-chip', role: 'button' });
+    this.projectChip.addEventListener('pointerup', (e) => {
+      e.stopPropagation();
+      const p = this.projectId ? PROJECT_MAP[this.projectId] : null;
+      if (p && !this.sandbox && (this.mode === 'explore' || this.mode === 'carry')) this.showBrief(p, true);
+    });
+    this.projectChip.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.powerChip = h('div', { class: 'chip hidden' });
     this.menuBtn = btn('☰', () => this.showMenu(), 'small round');
-    this.hudTop = h('div', { class: 'topbar' }, this.projectChip, this.powerChip, h('div', { class: 'spacer' }), this.menuBtn);
+    this.hintBtn = btn('💡', () => this.showHints(), 'small round hint-btn');
+    this.hudTop = h('div', { class: 'topbar' }, this.projectChip, this.powerChip, h('div', { class: 'spacer' }), this.hintBtn, this.menuBtn);
+    this.resultsEl = h('div', { class: 'results hidden' });
+    this.resultsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    this.ui.append(this.resultsEl);
     this.reticle = h('div', { class: 'reticle' });
     this.prompt = h('div', { class: 'prompt' });
     this.stickHint = h('div', { class: 'hint-stick hidden' }, '◀ drag to move · drag right side to look ▶');
@@ -347,6 +376,14 @@ export class Game {
     this.newSim(p, true);
     this.stash.clear();
     this.bench = newBlueprint();
+    this.benchSpot = null;
+    this.spots.clear();
+    this.hideResults();
+    // The curated parts bin is waiting on the lab shelf. No fetch quest.
+    for (const [id, n] of Object.entries(p.bin)) {
+      this.stash.set(id, n);
+      discover(this.save, id);
+    }
     if (keep) this.restoreSession(keep);
     this.persist();
     this.beginIntro(p);
@@ -366,26 +403,40 @@ export class Game {
     this.newSim(null, true);
     this.stash.clear();
     this.bench = newBlueprint();
+    this.benchSpot = null;
+    this.spots.clear();
+    this.hideResults();
     const s = this.save.session;
     if (s?.mode === 'sandbox') this.restoreSession(s);
     // Something to play with.
     this.sim.spawnItem({ part: 'playground_ball', pos: [4, 0.2, 0] });
     this.enterExplore();
-    this.thought.say('Sandbox! Everything I have found is on the lab shelf. No rules.', 4500);
+    this.thought.say('Sandbox! Every part there is, as many as I want. No rules.', 4500);
     this.persist();
   }
 
   private restoreSession(s: NonNullable<SaveData['session']>) {
+    const bin = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId].bin : {};
+    this.stash.clear();
     for (const [k, v] of Object.entries(s.stash)) this.stash.set(k, v);
     if (s.bench) this.bench = s.bench;
+    this.benchSpot = s.spot ?? null;
     for (const m of s.machines) this.sim.addMachine(m.bp, m.placement);
-    // Parts that are on the shelf / in machines are no longer lying in the yard.
-    if (!this.sandbox) {
-      const used: string[] = [];
-      for (const [k, v] of this.stash) for (let i = 0; i < v; i++) used.push(k);
-      for (const p of this.bench.parts) used.push(p.def);
-      for (const m of s.machines) for (const p of m.bp.parts) used.push(p.def);
-      for (const d of used) {
+    if (this.sandbox) return;
+    const have = new Map<string, number>(this.stash);
+    for (const p of this.bench.parts) have.set(p.def, (have.get(p.def) ?? 0) + 1);
+    for (const m of s.machines) for (const p of m.bp.parts) have.set(p.def, (have.get(p.def) ?? 0) + 1);
+    // The bin is always at least what the project hands out (older saves started empty).
+    for (const [id, n] of Object.entries(bin)) {
+      const short = n - (have.get(id) ?? 0);
+      if (short > 0) {
+        this.stash.set(id, (this.stash.get(id) ?? 0) + short);
+        have.set(id, n);
+      }
+    }
+    // Anything beyond the bin was junk carried in from the yard: it is not lying out there any more.
+    for (const [d, n] of have) {
+      for (let extra = n - (bin[d] ?? 0); extra > 0; extra--) {
         const it = [...this.sim.items.values()].find((i) => i.def.id === d && !i.tag);
         if (it) this.sim.removeItem(it.id);
       }
@@ -402,6 +453,7 @@ export class Game {
       bench: this.bench.parts.length ? this.bench : null,
       machines,
       stash: Object.fromEntries(this.stash),
+      spot: this.benchSpot,
     };
   }
 
@@ -461,24 +513,109 @@ export class Game {
         }
         this.cam.intro.look.lerp(pos, 1 - Math.exp(-dt * 5));
       } else if (this.introBall) {
-        ball.rb.setLinvel({ x: 0.6, y: -1, z: 0.2 }, true);
+        // Drop straight down onto its spot. (It used to keep rolling and ended up metres
+        // further away than the project is designed around.)
+        ball.rb.setTranslation(this.introBall.to.clone().setY(this.introBall.to.y + 0.3), true);
+        ball.rb.setLinvel({ x: 0, y: -1, z: 0 }, true);
+        ball.rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
         this.introBall = null;
       }
     }
     if (this.introT > (p.intro ? 2.6 : 1.6) && !this.modal.open) this.showBrief(p);
   }
 
-  private showBrief(p: ProjectDef) {
+  /**
+   * UNDERSTAND: the problem, what the machine has to do (never how), and the
+   * box of parts. That's the whole briefing.
+   */
+  private showBrief(p: ProjectDef, reopen = false) {
+    this.input.unlockPointer();
+    const n = PROJECTS.indexOf(p) + 1;
+    // Catalogue order, so the list never hints at an intended answer.
+    const order = new Map(PARTS.map((d, i) => [d.id, i]));
+    const bin = Object.entries(p.bin).sort((a, b) => (order.get(a[0]) ?? 0) - (order.get(b[0]) ?? 0));
+    const parts = h(
+      'div',
+      { class: 'bin-strip' },
+      ...bin.map(([id, count]) =>
+        h('div', { class: 'bin-part', title: getPart(id).name }, h('img', { src: partThumb(this.r.renderer, id), alt: '' }), h('span', {}, count > 1 ? `${getPart(id).name} ×${count}` : getPart(id).name)),
+      ),
+    );
+    const buttons = reopen
+      ? [btn('Back to it', () => this.modal.hide(), 'go'), btn('💡 Hints', () => this.showHints(), 'small')]
+      : [btn('Let’s go!', () => this.afterBrief(), 'go')];
     this.modal.show(
       [
-        h('div', { class: 'muted' }, `PROJECT · Stage ${p.stage}`),
+        h('div', { class: 'brief-head' }, h('span', { class: 'muted' }, `PROJECT ${n}`), h('span', { class: 'concept', title: p.concept.blurb }, `NEW IDEA: ${p.concept.name}`)),
         h('h1', {}, p.title),
         h('p', {}, p.pitch[0]),
         h('p', {}, p.pitch[1]),
-        h('div', { class: 'row' }, btn("Let's go!", () => this.afterBrief(), 'go')),
+        h('div', { class: 'label' }, 'YOUR MACHINE NEEDS TO:'),
+        h('ul', { class: 'goals' }, ...p.goals.map((g) => h('li', {}, g))),
+        h('div', { class: 'label' }, `PARTS BIN · ${bin.length} AVAILABLE`),
+        parts,
+        h('p', { class: 'loop' }, 'There’s no single right answer. Build something → TEST → look → change one thing → test again.'),
+        h('div', { class: 'row' }, ...buttons),
       ],
       'brief',
     );
+  }
+
+  /**
+   * Optional help, only ever when asked: first a few mental handles, then
+   * hints that get more specific one tap at a time.
+   */
+  private showHints() {
+    const p = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null;
+    if (!p) return;
+    this.input.unlockPointer();
+    const seen = this.save.hintsSeen[p.id] ?? 0;
+    const nudges = h(
+      'div',
+      { class: 'nudges' },
+      ...p.nudges.map((n) =>
+        btn(n.word, () => {
+          this.nudgePick = n.word;
+          this.audio.play('ui');
+          this.showHints();
+        }, `small nudge ${this.nudgePick === n.word ? 'on' : ''}`),
+      ),
+    );
+    const picked = p.nudges.find((n) => n.word === this.nudgePick);
+    const list = h('ol', { class: 'hint-list' }, ...p.hints.slice(0, seen).map((t) => h('li', {}, t)));
+    const labels = ['Give me a hint', 'A bit more help', 'More specific, please', 'Just tell me one way'];
+    const more: HTMLElement[] = [];
+    if (seen < 4) {
+      more.push(
+        btn(`💡 ${labels[seen]}`, () => {
+          revealHint(this.save, p.id);
+          this.persist();
+          this.audio.play('discover');
+          this.showHints();
+        }, 'small blue'),
+      );
+    } else if (ideasFor(p.id).length) {
+      more.push(btn('📐 Show me a whole machine, step by step', () => this.guideMe(), 'small'));
+    }
+    const back = this.mode === 'build' ? 'Back to the bench' : 'Back to it';
+    this.modal.show(
+      [
+        h('div', { class: 'label' }, '💭 WHAT ARE YOU THINKING?'),
+        nudges,
+        picked ? h('p', { class: 'nudge-line' }, `“${picked.line}”`) : h('p', { class: 'muted' }, 'Pick a word. It’s just a thought to chew on.'),
+        h('div', { class: 'label' }, `💡 HINTS${seen ? ` · ${seen} of 4` : ''}`),
+        seen ? list : h('p', { class: 'muted' }, 'Hints start vague and get more specific. Only if you want them!'),
+        h('div', { class: 'row' }, ...more, btn(back, () => this.modal.hide(), 'go')),
+      ],
+      'hints',
+    );
+  }
+
+  /** The last-resort hint: a step-by-step build at the bench. */
+  private guideMe() {
+    this.modal.hide();
+    if (this.mode !== 'build') this.goToBench();
+    setTimeout(() => this.mode === 'build' && this.build.showIdea(), 300);
   }
 
   private afterBrief() {
@@ -493,8 +630,9 @@ export class Game {
     this.sim.objectivesPaused = false;
     this.audio.unlock();
     this.enterExplore();
-    if (this.save.settings.hints && this.projectId === 'ball_over_fence' && !this.save.completed.ball_over_fence) {
-      setTimeout(() => this.thought.say('Hmm. The gate is locked. How do I get it back?', 4500), 900);
+    this.idleNudged = false;
+    if (this.save.settings.hints && this.projectId && !Object.keys(this.save.completed).length) {
+      setTimeout(() => this.mode === 'explore' && this.thought.say('My parts bin is in the lab. Tap 🔧 BENCH to start building.', 5000), 900);
       setTimeout(() => this.input.touchMode && this.stickHint.classList.remove('hidden'), 100);
       setTimeout(() => this.stickHint.classList.add('hidden'), 9000);
     }
@@ -574,6 +712,8 @@ export class Game {
     if (this.mode === 'carry' && this.carrying) {
       a.push({ id: 'place', label: `📍 PLACE${k('E')}`, cls: this.carrying.valid ? 'primary' : '', onPress: () => this.placeCarried() });
       a.push({ id: 'rot', label: `↻${k('R')}`, onPress: () => this.rotateCarried() });
+      const site = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId].site : null;
+      if (site && this.distTo(site.pos) > 3) a.push({ id: 'site', label: `🏃 ${site.label}`, onPress: () => this.goToSite() });
       if (this.nearBench() && !this.bench.parts.length) a.push({ id: 'tobench', label: '🔧 ON BENCH', onPress: () => this.carriedToBench() });
       if (touch) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
       return a;
@@ -589,6 +729,9 @@ export class Game {
       a.push({ id: 'build', label: `🔧 BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
     } else if (this.nearGateFromOutside()) {
       a.push({ id: 'gate', label: `🔓 OPEN GATE${k('E')}`, cls: 'primary', onPress: () => this.openGate() });
+    } else if (!this.running) {
+      // The bench is one tap away from anywhere: ideas should not wait on a long walk.
+      a.push({ id: 'bench', label: `🔧 BENCH${k('B')}`, onPress: () => this.goToBench() });
     }
     if (touch && !(this.running && this.driving && this.anyReceiver())) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
     return a;
@@ -607,7 +750,8 @@ export class Game {
         a.push({ id: 'act', label: `⚡ SWITCH${k('X')}`, onPress: () => this.pressAction() });
       }
     } else if (this.frozenMachines().length && this.mode === 'explore') {
-      a.push({ id: 'go', label: `▶ GO${k('G')}`, cls: 'go', onPress: () => this.go() });
+      a.push({ id: 'go', label: `▶ TEST${k('G')}`, cls: 'go test-btn', onPress: () => this.go() });
+      a.push({ id: 'tweak', label: `🔧 TWEAK${k('T')}`, onPress: () => this.tweakMachine() });
     }
     if (!this.running && this.replay.available && this.mode === 'explore') a.push({ id: 'replay', label: `⏺ REPLAY${k('V')}`, onPress: () => this.startReplay() });
     return a;
@@ -673,26 +817,37 @@ export class Game {
 
   // ================================================================== building
 
-  private absorbLab() {
+  /** Junk lying on the workbench top (the kid put it there). */
+  private benchTopItems(): Item[] {
+    const wb = WORLD.workbench;
+    return [...this.sim.items.values()].filter((it) => {
+      const p = it.rb.translation();
+      return !it.tag && Math.abs(p.x - wb.pos[0]) < wb.half[0] + 0.1 && Math.abs(p.z - wb.pos[2]) < wb.half[1] + 0.1 && p.y > wb.top - 0.05 && p.y < wb.top + 1;
+    });
+  }
+
+  /** Extra junk the kid found and put on the bench goes into the parts bin. */
+  private absorbBench() {
     if (this.sandbox) return;
-    for (const it of this.sim.itemsInZone('lab')) {
-      this.stash.set(it.def.id, (this.stash.get(it.def.id) ?? 0) + 1);
-      if (discover(this.save, it.def.id)) this.persistSoon();
-      this.sim.removeItem(it.id);
-    }
+    for (const it of this.benchTopItems()) this.addToBin(it);
+  }
+
+  private addToBin(it: Item) {
+    if (!it.def.buildable || it.tag) return;
+    this.stash.set(it.def.id, (this.stash.get(it.def.id) ?? 0) + 1);
+    if (discover(this.save, it.def.id)) this.persistSoon();
+    this.sim.removeItem(it.id);
+    this.toasts.show(`📦 Found a <b>${it.def.name}</b>. It’s in the parts bin now.`, 'new', 2600);
   }
 
   enterBuild() {
     if (this.sim.carried) {
       const it = this.sim.carried.item;
       this.sim.drop(0);
-      if (it.def.buildable && !it.tag && !this.sandbox) {
-        this.stash.set(it.def.id, (this.stash.get(it.def.id) ?? 0) + 1);
-        discover(this.save, it.def.id);
-        this.sim.removeItem(it.id);
-      }
+      if (!this.sandbox) this.addToBin(it);
     }
-    this.absorbLab();
+    this.absorbBench();
+    this.hideResults();
     this.mode = 'build';
     this.input.unlockPointer();
     this.input.enabled = false;
@@ -701,11 +856,6 @@ export class Game {
     this.thought.hide();
     document.body.classList.add('building');
     this.build.enter(this.bench);
-    // First time in the lab on a project with an idea: offer it.
-    if (!this.sandbox && this.projectId && !this.save.completed[this.projectId] && !this.bench.parts.length && !this.ideaOffered.has(this.projectId) && ideasFor(this.projectId).length) {
-      this.ideaOffered.add(this.projectId);
-      setTimeout(() => this.mode === 'build' && this.build.showIdea(true), 500);
-    }
   }
 
   private exitBuild(bp: Blueprint) {
@@ -718,13 +868,104 @@ export class Game {
   }
 
   private benchDone(bp: Blueprint) {
+    this.leaveBench();
+    this.bench = newBlueprint();
+    this.benchSpot = null;
+    this.startCarry(bp);
+    this.thought.say(`Where should the ${bp.name} go? Set it down, then hit ▶ TEST.`, 4000);
+    this.persist();
+  }
+
+  private leaveBench() {
     document.body.classList.remove('building');
     this.build.exit();
     this.input.enabled = true;
+  }
+
+  /** ▶ TEST from the bench: back to the spot it was tried last time, and go. */
+  private benchTestOut(bp: Blueprint) {
+    const spot = this.benchSpot;
+    if (!spot || !this.machineFits(bp, spot.placement)) {
+      this.toasts.show('Something’s in the way there now. Pick a new spot!', '', 2600);
+      this.benchDone(bp);
+      return;
+    }
+    this.leaveBench();
     this.bench = newBlueprint();
-    this.startCarry(bp);
-    this.thought.say(`Got it. Now where does the ${bp.name} go?`, 3500);
+    this.benchSpot = null;
+    const m = this.sim.addMachine(bp, spot.placement);
+    this.spots.set(m.id, spot);
+    this.sim.teleportPlayer(spot.player, spot.yaw);
+    this.enterExplore();
+    this.audio.play('attach', new THREE.Vector3(...spot.placement.pos));
+    this.go();
     this.persist();
+  }
+
+  /** Walk-free trip to the workbench. */
+  private goToBench() {
+    if (this.running) this.resetRun();
+    const wb = WORLD.workbench;
+    this.sim.teleportPlayer([wb.pos[0] + 1.4, 0, wb.pos[2]], Math.PI / 2);
+    this.yaw = this.sim.yaw;
+    this.enterBuild();
+  }
+
+  /** Carrying a machine: jump to a good spot next to the problem. */
+  private goToSite() {
+    const p = this.projectId ? PROJECT_MAP[this.projectId] : null;
+    if (!p) return;
+    this.sim.teleportPlayer(p.site.pos, p.site.yaw);
+    this.yaw = this.sim.yaw;
+    this.pitch = -0.25;
+    this.audio.play('whoosh');
+  }
+
+  private distTo(v: [number, number, number]) {
+    const p = this.sim.player!.translation();
+    return Math.hypot(p.x - v[0], p.z - v[2]);
+  }
+
+  /** Where the kid's feet are, for "stand here to watch it again". */
+  private feet(): [number, number, number] {
+    const p = this.sim.player!.translation();
+    return [p.x, Math.max(0, p.y - PLAYER.halfHeight - PLAYER.radius - 0.02), p.z];
+  }
+
+  /** 🔧 TWEAK: take the machine you're testing back to the bench, remembering where it stood. */
+  private tweakMachine(target?: MachineInstance) {
+    if (this.running) this.resetRun();
+    const look = this.lookTarget();
+    const candidates = this.frozenMachines();
+    const m = target ?? (look?.kind === 'machine' && candidates.includes(look.machine) ? look.machine : candidates[candidates.length - 1]);
+    if (!m) return;
+    this.hideResults();
+    // Something already on the bench gets set down on the garage floor, not thrown away.
+    if (this.bench.parts.length) this.parkBench();
+    this.benchSpot = this.spots.get(m.id) ?? { placement: m.placement, player: this.feet(), yaw: this.yaw };
+    this.spots.delete(m.id);
+    this.sim.removeMachine(m.id);
+    this.bench = m.bp;
+    this.audio.play('pickup');
+    this.goToBench();
+    this.persist();
+  }
+
+  private parkBench() {
+    const wb = WORLD.workbench;
+    const b = blueprintBounds(this.bench);
+    for (const [x, z] of [[wb.pos[0] + 0.3, wb.pos[2] + 2.2], [wb.pos[0] + 0.3, wb.pos[2] - 2.2], [wb.pos[0] + 2.2, wb.pos[2] + 2.5]]) {
+      const pl: MachinePlacement = { pos: [x, -b.min.y + 0.03, z], yaw: 0 };
+      if (this.machineFits(this.bench, pl)) {
+        this.sim.addMachine(this.bench, pl);
+        this.toasts.show('I set the bench machine down on the garage floor.', '', 2600);
+        this.bench = newBlueprint();
+        return;
+      }
+    }
+    for (const p of this.bench.parts) this.stash.set(p.def, (this.stash.get(p.def) ?? 0) + 1);
+    this.toasts.show('The bench parts went back in the bin.', '', 2600);
+    this.bench = newBlueprint();
   }
 
   private startTest(bp: Blueprint) {
@@ -742,10 +983,10 @@ export class Game {
 
   // ================================================================== carrying machines
 
-  private startCarry(bp: Blueprint) {
+  private startCarry(bp: Blueprint, spot?: TestSpot) {
     const view = new BlueprintView(bp);
     this.r.scene.add(view.group);
-    this.carrying = { bp, view, rot: 0, placement: null, valid: false };
+    this.carrying = { bp, view, rot: 0, placement: null, valid: false, spot };
     this.mode = 'carry';
     this.setHudVisible(true);
     this.yaw = this.sim.yaw;
@@ -827,12 +1068,13 @@ export class Game {
       return;
     }
     c.view.group.removeFromParent();
-    this.sim.addMachine(c.bp, c.placement);
+    const m = this.sim.addMachine(c.bp, c.placement);
+    this.spots.set(m.id, { placement: c.placement, player: this.feet(), yaw: this.yaw });
     this.audio.play('attach', new THREE.Vector3(...c.placement.pos));
     this.fx.emit('dust', new THREE.Vector3(c.placement.pos[0], 0.05, c.placement.pos[2]), 14);
     this.carrying = null;
     this.mode = 'explore';
-    if (this.save.settings.hints && !this.save.completed.ball_over_fence) this.thought.say('Ready. Hit GO and see what happens.', 3000);
+    if (this.save.settings.hints && !Object.keys(this.save.completed).length) this.thought.say('Ready? Hit ▶ TEST and see what happens.', 3000);
     this.persist();
   }
 
@@ -841,6 +1083,7 @@ export class Game {
     if (!c) return;
     c.view.group.removeFromParent();
     this.bench = c.bp;
+    this.benchSpot = c.spot ?? null;
     this.carrying = null;
     this.enterBuild();
   }
@@ -851,8 +1094,10 @@ export class Game {
       return;
     }
     const mass = blueprintMass(m.bp);
+    const spot = this.spots.get(m.id);
+    this.spots.delete(m.id);
     this.sim.removeMachine(m.id);
-    this.startCarry(m.bp);
+    this.startCarry(m.bp, spot);
     if (mass > 30) this.thought.say(`Oof. ${mass.toFixed(0)} kg. This is heavy.`, 2500);
     this.audio.play('pickup');
   }
@@ -861,6 +1106,8 @@ export class Game {
 
   go() {
     if (this.running || !this.frozenMachines().length) return;
+    this.hideResults();
+    this.probe.begin(this.sim, this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null, this.testMachine);
     this.sim.goAll();
     this.running = true;
     this.verdictShown = false;
@@ -877,9 +1124,20 @@ export class Game {
       const o = this.cam.orbit;
       const eye = this.sim.eye();
       o.center.copy(s);
-      o.yaw = Math.atan2(eye.x - s.x, eye.z - s.z);
       o.pitch = 0.42;
       o.dist = THREE.MathUtils.clamp(eye.distanceTo(s) + 2.5, 3.5, 8);
+      // Watch the machine AND what it is after, from high enough to see over fences.
+      const t = this.projectId ? this.sim.itemByTag('target') : undefined;
+      if (t) {
+        const tp = toV(t.rb.translation());
+        const d = tp.distanceTo(s);
+        if (d < 10) {
+          o.center.copy(s).lerp(tp, 0.5);
+          o.dist = THREE.MathUtils.clamp(d * 1.1 + 3, 4, 10);
+          o.pitch = 0.62;
+        }
+      }
+      o.yaw = Math.atan2(eye.x - o.center.x, eye.z - o.center.z);
       this.cam.set('free', false, 1.0);
     }
     this.persistSoon();
@@ -887,15 +1145,69 @@ export class Game {
 
   resetRun() {
     if (!this.running) return;
-    const verdict = !this.succeeded && this.journal.worthMentioning() && !this.verdictShown ? this.journal.verdict() : null;
+    const report = !this.succeeded && !this.verdictShown && this.journal.worthMentioning() ? this.report() : null;
     for (const m of [...this.sim.machines.values()]) if (m.id !== this.testMachine) this.sim.resetMachine(m.id);
     this.running = false;
+    this.verdictShown = true;
     this.replay.stop();
     this.cam.set('eyes', false, 0.8);
-    if (verdict) {
-      this.thought.say(verdict, 4500);
-      this.audio.play('fail');
-    }
+    if (report) this.showResults(report);
+  }
+
+  /** Start over: machines back where they were set down, and the target back where it started. */
+  private startOver() {
+    if (this.running) this.resetRun();
+    const t = this.sim.itemByTag('target');
+    if (t && !this.succeeded && this.sim.carried?.item !== t) this.sim.respawnItem(t);
+    this.hideResults();
+    this.audio.play('ui');
+  }
+
+  private report(): TestReport {
+    const p = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null;
+    return analyze(this.probe.finish(this.succeeded), p);
+  }
+
+  /**
+   * LEARN: what the test showed, as a few gauges and one plain observation,
+   * with the next step (reset, start over, tweak) one tap away.
+   */
+  private showResults(r: TestReport) {
+    if (this.sandbox && r.mood === 'learned' && r.observation === 'Interesting result!') return;
+    this.audio.play('hmm');
+    const seg = (v: number | null) => {
+      const n = v === null ? 0 : Math.round(v * 10);
+      return h('div', { class: `gauge-bar ${v === null ? 'na' : v < 0.45 ? 'low' : v < 0.8 ? 'mid' : 'high'}` }, ...Array.from({ length: 10 }, (_, i) => h('i', { class: i < n ? 'on' : '' })));
+    };
+    const rows = r.gauges.map((g) => h('div', { class: 'gauge' }, h('b', {}, g.label), seg(g.value), h('small', {}, g.value === null ? `— ${g.note}` : g.note)));
+    const canTweak = [...this.sim.machines.values()].some((m) => m.id !== this.testMachine);
+    const parts: Node[] = [
+      h('div', { class: 'results-head' }, h('span', {}, '🔬 TEST RESULTS'), btn('✕', () => this.hideResults(), 'small round close')),
+      h('div', { class: 'gauges' }, ...rows),
+      h('div', { class: 'label' }, '👀 WHAT HAPPENED'),
+      h('p', { class: 'obs' }, r.observation),
+    ];
+    if (r.tryNext) parts.push(h('p', { class: 'try' }, `💭 ${r.tryNext}`));
+    this.resultsEl.replaceChildren(
+      ...parts,
+      h(
+        'div',
+        { class: 'row' },
+        btn('⟲ Reset', () => {
+          if (this.running) this.resetRun();
+          this.hideResults();
+        }, 'small'),
+        this.sim.itemByTag('target') ? btn('↺ Start over', () => this.startOver(), 'small') : null,
+        canTweak ? btn('🔧 Tweak it', () => this.tweakMachine(), 'small primary') : null,
+      ),
+    );
+    this.resultsEl.classList.remove('hidden');
+    document.body.classList.add('has-results');
+  }
+
+  private hideResults() {
+    this.resultsEl?.classList.add('hidden');
+    document.body.classList.remove('has-results');
   }
 
   private cycleCamera() {
@@ -971,15 +1283,16 @@ export class Game {
     const evs = this.sim.drainEvents();
     for (const e of evs) {
       if (this.running || this.testMachine !== null) this.journal.event(e);
+      if (this.running) this.probe.event(e);
       this.eventFx(e);
     }
     for (const oe of this.sim.objectiveEvents.splice(0)) {
       if (oe.type === 'success') this.onSuccess(oe.bonuses, oe.time);
       if (oe.type === 'fail') {
-        this.toasts.show(oe.message, 'bad', 4000);
-        this.audio.play('fail');
+        this.toasts.show(oe.message, '', 4000);
+        this.audio.play('hmm');
       }
-      if (oe.type === 'bonusLost' && this.save.settings.hints) this.toasts.show(`✗ ${oe.def.label}`, '', 1800);
+      if (oe.type === 'bonusLost' && this.save.settings.hints) this.toasts.show(`☆ ${oe.def.label}: not this time`, '', 1800);
     }
   }
 
@@ -1069,7 +1382,9 @@ export class Game {
   private onSuccess(bonuses: { def: { id: string; label: string }; earned: boolean }[], time: number) {
     if (this.succeeded || !this.projectId) return;
     this.succeeded = true;
+    this.hideResults();
     const p = PROJECT_MAP[this.projectId];
+    const byMachine = this.running && bonuses.some((b) => b.def.id === 'hands_off' && b.earned);
     const unlocked = completeProject(this.save, this.projectId, time, bonuses.filter((b) => b.earned).map((b) => b.def.id));
     this.save.session = null;
     writeSave(this.save);
@@ -1082,10 +1397,11 @@ export class Game {
       const nextId = PROJECTS.find((x) => this.save.unlocked.includes(x.id) && !this.save.completed[x.id])?.id;
       const content: Node[] = [
         h('div', { class: 'muted' }, `${p.title} · solved in ${fmtTime(time)}`),
-        h('h1', {}, 'GOT IT!'),
+        h('h1', {}, byMachine ? 'I BUILT THAT.' : 'GOT IT!'),
+        h('p', {}, byMachine ? `The ${p.target} is back, and a machine you made did it.` : `The ${p.target} is back. However you did it, it counts.`),
         ...bonuses.map((b) => h('div', { class: `bonus ${b.earned ? 'got' : 'miss'}` }, h('i', {}, b.earned ? '★' : ''), b.def.label)),
       ];
-      if (unlocked.sandbox) content.push(h('p', {}, '🧪 Sandbox unlocked! Build anything with everything you have found.'));
+      if (unlocked.sandbox) content.push(h('p', {}, '🧪 Sandbox unlocked! Every part there is, as many as you want.'));
       if (unlocked.projects.length) content.push(h('p', {}, `New: ${unlocked.projects.map((id) => PROJECT_MAP[id].title).join(', ')}`));
       content.push(h('p', { class: 'muted' }, 'Wait. What ELSE can I build?'));
       const row = h('div', { class: 'row' });
@@ -1138,6 +1454,15 @@ export class Game {
         break;
       case 'x':
         this.pressAction();
+        break;
+      case 'b':
+        if (!this.running && this.mode === 'explore') this.goToBench();
+        break;
+      case 't':
+        if (!this.running && this.mode === 'explore') this.tweakMachine();
+        break;
+      case 'h':
+        this.showHints();
         break;
       case 'v':
         if (!this.running && this.replay.available) this.startReplay();
@@ -1202,10 +1527,11 @@ export class Game {
     this.handleEvents();
     if (this.running || this.testMachine !== null) {
       this.journal.sample(this.sim, dt, this.lastThrottle);
+      if (this.running) this.probe.sample(this.sim, dt);
+      // Everything has come to rest: show what the test found (the machine stays as it ended up).
       if (this.running && this.journal.settled && !this.verdictShown && !this.succeeded && Math.abs(this.lastThrottle) < 0.1) {
         this.verdictShown = true;
-        this.thought.say(this.journal.verdict() + '  (Tap RESET to try again.)', 5000);
-        this.audio.play('fail');
+        this.showResults(this.report());
       }
     }
     // Footsteps
@@ -1325,7 +1651,7 @@ export class Game {
     if (this.mode === 'replay') return;
     const proj = this.projectId ? PROJECT_MAP[this.projectId] : null;
     const title = this.sandbox ? '🧪 SANDBOX' : proj?.title ?? '';
-    const sub = this.sandbox ? 'No rules. Just junk.' : this.succeeded ? 'Solved! ★' : `${proj?.pitch[1] ?? ''} · ${fmtTime(this.sim.projectTime)}`;
+    const sub = this.sandbox ? 'No rules. Every part.' : this.succeeded ? 'Solved! ★' : `tap for the goal · ${fmtTime(this.sim.projectTime)}`;
     const html = `${title}<small>${sub}</small>`;
     if (this.projectChip.innerHTML !== html) this.projectChip.innerHTML = html;
     // Power readout while things run.
@@ -1343,18 +1669,15 @@ export class Game {
     this.leftActions.set(explore ? this.runActions() : []);
     this.reticle.classList.toggle('hidden', this.cam.mode !== 'eyes');
     this.prompt.classList.toggle('hidden', this.cam.mode !== 'eyes');
-    if (this.save.settings.hints && this.mode === 'explore' && !this.running) {
+    // Never hand out hints unasked. After a long quiet spell, just point at where help lives, once.
+    if (this.save.settings.hints && this.mode === 'explore' && !this.running && this.projectId && !this.sandbox) {
       this.hintTimer += 1 / 60;
-      if (this.hintTimer > 50 && !this.sim.machines.size && this.projectId === 'ball_over_fence' && !this.succeeded) {
-        this.hintTimer = 0;
-        const lines = [
-          'All the good junk ends up in the garage lab...',
-          'That gap under the fence is small. But something small could fit.',
-          'I bet I could build something that goes and gets it.',
-        ];
-        this.thought.say(lines[Math.floor(this.time) % lines.length], 4500);
+      if (this.hintTimer > 120 && !this.idleNudged && !this.sim.machines.size && !this.succeeded && !(this.save.hintsSeen[this.projectId] ?? 0)) {
+        this.idleNudged = true;
+        this.thought.say('Stuck? The 💡 up top has hints, if I want them.', 4500);
       }
     }
+    this.hintBtn.classList.toggle('hidden', !this.projectId || this.sandbox);
     void inZone;
   }
 }

@@ -571,3 +571,171 @@ body.building .build-ui.guiding ~ .thought, body.building .thought { z-index: 1;
   .build-top .btn { min-height: 44px; padding: 6px 10px; font-size: 14px; border-radius: 12px; }
   .build-top .chip { font-size: 13px; max-width: 34vw; }
 }
+
+/* ================================================================ workbench flow */
+/* The big TEST button lives just above the parts bin, always one tap away. */
+.bench-go {
+  position: fixed;
+  right: calc(10px + var(--safe-r));
+  bottom: calc(136px + var(--safe-b));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.bench-go .btn.small { white-space: nowrap; }
+.btn.test-btn { font-size: 24px; min-height: 68px; padding: 10px 26px; letter-spacing: 0.04em; box-shadow: 0 5px 0 rgba(47, 36, 24, 0.45), 0 0 0 4px rgba(255, 255, 255, 0.35); }
+.actions .btn.test-btn { min-width: 150px; }
+.build-panel { right: auto; left: calc(10px + var(--safe-l)); }
+
+/* A label taped to the parts bin. */
+.tray-label {
+  position: fixed;
+  left: calc(14px + var(--safe-l));
+  bottom: calc(122px + var(--safe-b));
+  background: var(--tape);
+  color: var(--ink);
+  font-weight: 900;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  padding: 3px 10px 2px;
+  border: 2px solid var(--ink);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  transform: rotate(-1.5deg);
+  pointer-events: none !important;
+}
+
+/* "Sticks to the plank" right by the finger. */
+.cursor-tag {
+  position: fixed;
+  transform: translate(-50%, 26px);
+  background: rgba(40, 140, 70, 0.95);
+  color: #fff;
+  font-weight: 900;
+  font-size: 13px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  border: 2px solid var(--ink);
+  white-space: nowrap;
+  pointer-events: none !important;
+  z-index: 3;
+}
+.cursor-tag.joint { background: rgba(30, 130, 220, 0.95); }
+.cursor-tag.nope { background: rgba(190, 60, 40, 0.92); }
+.cursor-tag:empty { display: none; }
+
+/* ================================================================ briefing */
+.brief-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.concept {
+  background: var(--blue);
+  color: #fff;
+  font-weight: 900;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: 99px;
+  border: 2px solid var(--ink);
+}
+.card .label { font-weight: 900; font-size: 12px; letter-spacing: 0.1em; opacity: 0.75; margin: 14px 0 4px; }
+.goals { margin: 0; padding-left: 0; list-style: none; }
+.goals li { font-weight: 800; font-size: 17px; margin: 4px 0; padding-left: 28px; position: relative; line-height: 1.25; }
+.goals li::before { content: '☐'; position: absolute; left: 2px; top: -1px; font-size: 19px; }
+.bin-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 6px 2px 8px;
+  background: rgba(60, 40, 22, 0.12);
+  border-radius: 12px;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.bin-strip::-webkit-scrollbar { display: none; }
+.bin-part { flex: 0 0 auto; width: 64px; text-align: center; font-size: 10px; font-weight: 900; line-height: 1.05; }
+.bin-part img { width: 52px; height: 52px; object-fit: contain; display: block; margin: 0 auto 2px; background: #fff; border: 2px solid var(--ink); border-radius: 10px; }
+.card p.loop { font-size: 14px; opacity: 0.8; margin-top: 12px; }
+.project-chip { cursor: pointer; }
+
+/* ================================================================ hints */
+.hint-btn { background: #fff1b8; }
+.nudges { display: flex; gap: 8px; flex-wrap: wrap; }
+.nudges .btn { flex: 1 1 auto; }
+.nudges .btn.on { background: var(--tape); transform: translateY(2px); }
+.card p.nudge-line { font-size: 19px; font-style: italic; }
+.hint-list { margin: 4px 0 0; padding-left: 22px; }
+.hint-list li { font-weight: 700; font-size: 16px; margin: 6px 0; line-height: 1.3; }
+.hint-list li:last-child { font-weight: 900; }
+.hints { transform: rotate(0.6deg); }
+
+/* ================================================================ test results */
+.results {
+  position: fixed;
+  left: 50%;
+  bottom: calc(12px + var(--safe-b));
+  transform: translateX(-50%) rotate(-0.6deg);
+  width: min(94vw, 440px);
+  max-height: calc(100% - 120px - var(--safe-t));
+  overflow: auto;
+  background: var(--paper);
+  border: 4px solid var(--ink);
+  border-radius: 20px;
+  padding: 10px 14px 12px;
+  box-shadow: 0 6px 0 rgba(47, 36, 24, 0.4);
+  z-index: 4;
+  animation: slide-up 0.3s ease-out;
+  touch-action: pan-y;
+}
+@keyframes slide-up { from { transform: translate(-50%, 40px) rotate(-0.6deg); opacity: 0; } }
+.results-head { display: flex; justify-content: space-between; align-items: center; font-weight: 900; letter-spacing: 0.08em; font-size: 14px; }
+.results-head .btn.close { min-height: 36px; min-width: 36px; padding: 0; font-size: 14px; }
+.results .label { font-weight: 900; font-size: 11px; letter-spacing: 0.1em; opacity: 0.7; margin: 8px 0 0; }
+.gauges { display: grid; gap: 4px; margin-top: 6px; }
+.gauge { display: grid; grid-template-columns: 72px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; }
+.gauge b { font-size: 14px; grid-row: 1 / span 2; }
+.gauge small { font-size: 11px; font-weight: 800; opacity: 0.7; }
+.gauge-bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; height: 14px; }
+.gauge-bar i { border: 2px solid var(--ink); border-radius: 3px; background: #fff; }
+.gauge-bar.high i.on { background: var(--green); }
+.gauge-bar.mid i.on { background: #f0b429; }
+.gauge-bar.low i.on { background: #ef8a5a; }
+.gauge-bar.na i { opacity: 0.25; }
+.results p { margin: 4px 0; font-weight: 800; line-height: 1.3; }
+.results p.obs { font-size: 16px; }
+.results p.try { font-size: 15px; font-style: italic; opacity: 0.85; }
+.results .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.results .row .btn { flex: 1 1 auto; }
+/* While results are up, the card holds the next actions; keep the bottom corner clear. */
+body.has-results .actions.right, body.has-results .thought { display: none !important; }
+@media (max-height: 480px) {
+  .bench-go { bottom: calc(112px + var(--safe-b)); }
+  .tray-label { bottom: calc(98px + var(--safe-b)); }
+  .btn.test-btn { font-size: 19px; min-height: 54px; }
+  .results { width: min(60vw, 440px); left: auto; right: calc(10px + var(--safe-r)); transform: none; max-height: calc(100% - 20px); }
+  @keyframes slide-up { from { opacity: 0; } }
+  .gauge-bar { height: 11px; }
+}
+
+/* Phones: keep the thought bubble clear of the button column on the right. */
+@media (max-width: 600px) {
+  body:not(.building) .thought {
+    left: calc(12px + var(--safe-l));
+    right: auto;
+    transform: rotate(-1deg);
+    max-width: calc(100vw - 150px - var(--safe-l) - var(--safe-r));
+    bottom: calc(110px + var(--safe-b));
+    font-size: 15px;
+    padding: 8px 12px;
+  }
+  .topbar .chip { min-width: 0; }
+  .project-chip { flex: 0 1 auto; max-width: 44vw; }
+  .project-chip small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar .meter { width: 72px; }
+  .topbar .chip:not(.project-chip) small { white-space: nowrap; }
+}
+/* Landscape phones: thoughts tuck into the top-left corner instead of covering the bench. */
+@media (max-height: 480px) {
+  body.building .thought { top: calc(64px + var(--safe-t)); left: calc(12px + var(--safe-l)); transform: rotate(-1deg); max-width: 36vw; font-size: 14px; padding: 6px 12px; }
+  body:not(.building) .thought { left: calc(12px + var(--safe-l)); transform: rotate(-1deg); max-width: 44vw; bottom: calc(16px + var(--safe-b)); }
+}

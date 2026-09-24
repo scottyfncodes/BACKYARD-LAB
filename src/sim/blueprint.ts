@@ -415,6 +415,25 @@ export interface Issue {
   part?: number;
 }
 
+/**
+ * Forgiving building: if something now hangs below the bench top (a wheel on
+ * the side of a plank lying flat), lift the whole machine so its lowest point
+ * rests on the bench instead of refusing the part. Returns how far it moved.
+ */
+export function liftOntoBench(bp: Blueprint, uid?: number): number {
+  if (!bp.parts.length) return 0;
+  // Only the piece that part belongs to moves; anything else on the bench stays put.
+  const group = uid === undefined ? null : new Set(components(bp).find((g) => g.includes(uid)) ?? [uid]);
+  if (group) for (const l of bp.links) if (group.has(l.a.part) || group.has(l.b.part)) group.add(l.part);
+  const parts = group ? bp.parts.filter((p) => group.has(p.uid)) : bp.parts;
+  const links = group ? bp.links.filter((l) => group.has(l.part) && group.has(l.a.part) && group.has(l.b.part)) : bp.links;
+  const dy = -blueprintBounds({ ...bp, parts, links }).min.y;
+  if (dy <= 1e-4) return 0;
+  for (const p of parts) p.p = [p.p[0], p.p[1] + dy, p.p[2]];
+  for (const c of bp.connections) if (!group || group.has(c.a)) c.anchor = [c.anchor[0], c.anchor[1] + dy, c.anchor[2]];
+  return dy;
+}
+
 /** Sanity-check a whole blueprint (used before carrying it off the bench). */
 export function validateBlueprint(bp: Blueprint): Issue[] {
   const issues: Issue[] = [];
