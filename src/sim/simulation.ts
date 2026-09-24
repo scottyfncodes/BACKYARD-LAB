@@ -18,7 +18,7 @@ export interface Item {
   tag?: string;
   spawn: SpawnDef;
   touched: boolean;
-  snag?: { anchor: Vector3; local: Vector3; breakForce: number; over: number; tie?: boolean; rest?: number };
+  snag?: { anchor: Vector3; local: Vector3; breakForce: number; over: number; tie?: boolean; rest?: number; peak?: number };
 }
 
 export interface SimInput {
@@ -442,6 +442,7 @@ export class Simulation implements MachineHost {
     F.y += m * 9.81;
     if (F.length() > PLAYER.strength) F.setLength(PLAYER.strength);
     rb.resetForces(true);
+    rb.resetTorques(true);
     rb.addForce({ x: F.x, y: F.y, z: F.z }, true);
     const want = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), this.yaw).multiply(c.rel);
     const cur = toQ(rb.rotation());
@@ -463,15 +464,31 @@ export class Simulation implements MachineHost {
       const pose = { p: toV(it.rb.translation()), q: toQ(it.rb.rotation()) };
       const p = transformPoint(pose, s.local);
       const v = toV(it.rb.velocityAtPoint({ x: p.x, y: p.y, z: p.z }));
+      // The snag pulls on a point away from the centre, so it twists the item too: size the spring
+      // for the mass that point really has (light flat kites have very little). Sizing it for the
+      // whole mass made the damping over-correct each step and the kite shook itself loose.
       const m = it.rb.mass();
-      const k = stableStiffness(3000, m, dt);
+      const inertia = it.rb.principalInertia();
+      const iMin = Math.max(1e-6, Math.min(inertia.x, inertia.y, inertia.z));
+      const arm = p.distanceTo(toV(it.rb.worldCom()));
+      const mEff = 1 / (1 / m + (arm * arm) / iMin);
+      const k = stableStiffness(3000, mEff, dt);
       const d = s.anchor.clone().sub(p);
       const slack = s.rest ?? 0;
       const dl = d.length();
       if (dl <= slack) continue;
-      const F = d.multiplyScalar(((dl - slack) / Math.max(dl, 1e-6)) * k).sub(v.multiplyScalar(criticalDamping(k, m, 0.9)));
+      const F = d.multiplyScalar(((dl - slack) / Math.max(dl, 1e-6)) * k).sub(v.multiplyScalar(criticalDamping(k, mEff, 0.9)));
       // Measure the pull ignoring the item's own weight.
       const pull = F.clone().add(new Vector3(0, -m * 9.81, 0)).length();
+      // How hard it has been tugged, for the test readout (ignores the settling second).
+      if (this.time > 1) s.peak = Math.max(s.peak ?? 0, pull / s.breakForce);
+      // A hard bump that shoves the snagged corner well off the branch pops it free,
+      // even if the pull is too brief to count as a steady tug.
+      if (!s.tie && dl - slack > 0.04 && this.time > 1) {
+        it.snag = undefined;
+        this.emit({ type: 'unsnag', pos: p, tag: it.tag ?? '' });
+        continue;
+      }
       // Give snagged things a moment to settle before they can tear loose.
       if (pull > s.breakForce && this.time > 1) {
         s.over += dt;
@@ -489,8 +506,12 @@ export class Simulation implements MachineHost {
     for (const it of this.items.values()) {
       if (this.carried?.item === it) continue;
       const lift = it.def.behaviors.find((b) => b.type === 'buoyancy');
-      if (it.rb.isSleeping() && !lift) continue;
+      // Forces AND torques persist in Rapier until reset. Clear both on every item every step:
+      // a force pushed at a point (a snag, a grab) leaves torque behind, and a freed kite used to
+      // keep that phantom torque and spin forever.
       it.rb.resetForces(false);
+      it.rb.resetTorques(false);
+      if (it.rb.isSleeping() && !lift) continue;
       if (lift && lift.type === 'buoyancy') it.rb.addForce({ x: 0, y: lift.lift, z: 0 }, true);
       const v = toV(it.rb.linvel());
       const sp = v.length();

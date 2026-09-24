@@ -12,7 +12,16 @@ export interface SaveData {
   sandbox: boolean;
   creations: { name: string; bp: Blueprint; savedAt: number }[];
   settings: { sound: boolean; sensitivity: number; hints: boolean };
+  /** How many hints the player has chosen to reveal, per project. */
+  hintsSeen: Record<string, number>;
   session: SessionData | null;
+}
+
+/** Where a machine was last set down to test, and where the kid stood to watch. */
+export interface TestSpot {
+  placement: MachinePlacement;
+  player: [number, number, number];
+  yaw: number;
 }
 
 export interface SessionData {
@@ -21,6 +30,8 @@ export interface SessionData {
   bench: Blueprint | null;
   machines: { bp: Blueprint; placement: MachinePlacement }[];
   stash: Record<string, number>;
+  /** The bench machine's last test spot, so "test again" puts it straight back. */
+  spot?: TestSpot | null;
 }
 
 export const SAVE_KEY = 'backyardlab.save.v1';
@@ -35,6 +46,7 @@ export function defaultSave(): SaveData {
     sandbox: false,
     creations: [],
     settings: { sound: true, sensitivity: 1, hints: true },
+    hintsSeen: {},
     session: null,
   };
 }
@@ -84,8 +96,24 @@ export function parseSave(raw: string | null): SaveData {
     if (typeof s.sensitivity === 'number' && s.sensitivity >= 0.2 && s.sensitivity <= 3) d.settings.sensitivity = s.sensitivity;
     if (typeof s.hints === 'boolean') d.settings.hints = s.hints;
   }
+  if (j.hintsSeen && typeof j.hintsSeen === 'object') {
+    for (const [k, v] of Object.entries(j.hintsSeen as Record<string, unknown>)) {
+      if (PROJECT_MAP[k] && typeof v === 'number' && v > 0) d.hintsSeen[k] = Math.min(4, Math.floor(v));
+    }
+  }
   d.session = parseSession(j.session);
   return d;
+}
+
+const isNum = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
+const isV3 = (x: unknown): x is [number, number, number] => Array.isArray(x) && x.length === 3 && x.every(isNum);
+
+function parseSpot(x: unknown): TestSpot | null {
+  if (!x || typeof x !== 'object') return null;
+  const s = x as Record<string, unknown>;
+  const pl = s.placement as Record<string, unknown> | undefined;
+  if (!pl || !isV3(pl.pos) || !isV3(s.player)) return null;
+  return { placement: { pos: [...pl.pos], yaw: isNum(pl.yaw) ? pl.yaw : 0 }, player: [...s.player], yaw: isNum(s.yaw) ? s.yaw : 0 };
 }
 
 function parseSession(x: unknown): SessionData | null {
@@ -110,7 +138,7 @@ function parseSession(x: unknown): SessionData | null {
       if (PART_MAP[k] && typeof v === 'number' && v > 0 && v < 1000) stash[k] = Math.floor(v);
     }
   }
-  return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash };
+  return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash, spot: parseSpot(s.spot) };
 }
 
 export function loadSave(store: KV | null = typeof localStorage !== 'undefined' ? localStorage : null): SaveData {
@@ -158,9 +186,16 @@ export function isUnlocked(save: SaveData, projectId: string): boolean {
   return save.unlocked.includes(projectId);
 }
 
-/** Parts available in unlimited supply in the sandbox. */
-export function sandboxParts(save: SaveData): string[] {
-  return PARTS.filter((p) => p.buildable && save.discovered.includes(p.id)).map((p) => p.id);
+/** Sandbox: the whole library, unlimited. Go absolutely nuts. */
+export function sandboxParts(): string[] {
+  return PARTS.filter((p) => p.buildable).map((p) => p.id);
+}
+
+/** Reveal the next hint for a project (up to all four). Returns how many are now showing. */
+export function revealHint(save: SaveData, projectId: string): number {
+  const n = Math.min(4, (save.hintsSeen[projectId] ?? 0) + 1);
+  save.hintsSeen[projectId] = n;
+  return n;
 }
 
 export function totalBonuses(save: SaveData): { earned: number; possible: number } {
