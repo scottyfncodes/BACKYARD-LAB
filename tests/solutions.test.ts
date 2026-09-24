@@ -135,13 +135,24 @@ describe('THE BALL: different solutions all work', () => {
   });
 });
 
+describe('THE KITE stays stuck until something frees it', () => {
+  it('left alone, the kite hangs in the tree (it used to shake itself loose after ~5 s)', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.kite_in_tree, player: false });
+    const kite = sim.itemByTag('target')!;
+    sim.run(30);
+    expect(kite.snag).toBeTruthy();
+    expect(toV(kite.rb.translation()).y).toBeGreaterThan(2.7);
+    expect(successOf(sim)).toBeUndefined();
+  });
+});
+
 describe('THE KITE is solvable', () => {
-  it('THROW: the kid chucks a wad of duct tape at the kite and knocks it loose', () => {
+  it('THROW: the kid chucks a brick from the garden at the kite and knocks it loose', () => {
     const sim = new Simulation({ project: PROJECT_MAP.kite_in_tree, junk: false });
-    const tape = sim.spawnItem({ part: 'duct_tape', pos: [9.2, 0.1, 7.3] });
+    const brick = sim.spawnItem({ part: 'brick', pos: [9.2, 0.1, 7.3] });
     sim.teleportPlayer([9.2, 0, 7.8], 0);
     sim.run(0.3);
-    expect(sim.pickUp(tape).ok).toBe(true);
+    expect(sim.pickUp(brick).ok).toBe(true);
     const kite = sim.itemByTag('target')!;
     const aim = () => {
       const to = toV(kite.rb.translation()).sub(sim.eye());
