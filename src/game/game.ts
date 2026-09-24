@@ -8,16 +8,16 @@ import { ideasFor } from '../data/ideas';
 import { Effects } from '../render/effects';
 import { detectQuality, Renderer } from '../render/renderer';
 import { BlueprintView, WorldView } from '../render/views';
-import { blueprintBounds, blueprintMass, clone, newBlueprint, partPose, type Blueprint } from '../sim/blueprint';
+import { blueprintBounds, blueprintMass, clone, newBlueprint, type Blueprint } from '../sim/blueprint';
 import type { SimEvent } from '../sim/events';
-import { obbBounds, partOBBs } from '../sim/geom';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
-import { GROUP, groups, RAPIER, toV } from '../sim/physics';
+import { GROUP, groups, toV } from '../sim/physics';
 import { emptyInput, PLAYER, Simulation, type Item, type SimInput } from '../sim/simulation';
 import { partThumb } from '../render/thumbs';
 import { ActionBar, btn, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
 import { BuildMode, type Stash } from './build';
 import { CameraDirector } from './camera';
+import { autoSpot, machineFits, type Area } from './autospot';
 import { analyze, TestProbe, type TestReport } from './diagnostics';
 import { Input } from './input';
 import { RunJournal } from './journal';
@@ -191,8 +191,7 @@ export class Game {
         return self.save.settings.hints;
       },
       onDone: (bp: Blueprint) => this.benchDone(bp),
-      onTestOut: (bp: Blueprint) => this.benchTestOut(bp),
-      hasSpot: () => !!this.benchSpot,
+      onTestOut: (bp: Blueprint) => this.goForIt(bp),
       get onHints() {
         return self.projectId && !self.sandbox ? () => self.showHints() : null;
       },
@@ -745,7 +744,9 @@ export class Game {
     const touch = this.input.touchMode;
     const k = (s: string) => (touch ? '' : ` <small>[${s}]</small>`);
     if (this.running) {
-      a.push({ id: 'reset', label: `⟲ RESET${k('R')}`, cls: 'danger', onPress: () => this.resetRun() });
+      a.push({ id: 'stop', label: `■ STOP${k('R')}`, cls: 'danger', onPress: () => this.resetRun() });
+      if (this.projectId && !this.sandbox) a.push({ id: 'retry', label: `↺ RETRY${k('G')}`, onPress: () => this.retry() });
+      a.push({ id: 'build', label: `🔧 BUILD${k('T')}`, onPress: () => this.tweakMachine() });
       const camLabel = { eyes: '👀', chase: '🎥', wide: '🗺', free: '✋', bench: '🎥', intro: '🎥' }[this.cam.mode];
       a.push({ id: 'cam', label: `${camLabel}${k('C')}`, onPress: () => this.cycleCamera() });
       if (this.anyReceiver()) {
@@ -754,7 +755,7 @@ export class Game {
       }
     } else if (this.frozenMachines().length && this.mode === 'explore') {
       a.push({ id: 'go', label: `▶ TEST${k('G')}`, cls: 'go test-btn', onPress: () => this.go() });
-      a.push({ id: 'tweak', label: `🔧 TWEAK${k('T')}`, onPress: () => this.tweakMachine() });
+      a.push({ id: 'tweak', label: `🔧 BUILD${k('T')}`, onPress: () => this.tweakMachine() });
       a.push({ id: 'turn', label: `↻ TURN${k('Y')}`, onPress: () => this.turnMachine() });
     }
     if (!this.running && this.replay.available && this.mode === 'explore') a.push({ id: 'replay', label: `⏺ REPLAY${k('V')}`, onPress: () => this.startReplay() });
@@ -886,24 +887,45 @@ export class Game {
     this.input.enabled = true;
   }
 
-  /** ▶ TEST from the bench: back to the spot it was tried last time, and go. */
-  private benchTestOut(bp: Blueprint) {
-    const spot = this.benchSpot;
-    if (!spot || !this.machineFits(bp, spot.placement)) {
-      this.toasts.show('Something’s in the way there now. Pick a new spot!', '', 2600);
+  /** Where GO FOR IT works: at the project's problem, or out on the lawn in the sandbox. */
+  private area(): Area & { stand: TestSpot['player']; yaw: number } {
+    const p = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null;
+    if (!p) return { approach: new THREE.Vector3(0, 0, -1.5), site: new THREE.Vector3(0, 0, -4.5), target: null, zone: 'home_yard', stand: [0, 0, -4.5], yaw: Math.PI };
+    const t = this.sim.itemByTag('target');
+    return { approach: new THREE.Vector3(...p.approach), site: new THREE.Vector3(...p.site.pos), target: t ? toV(t.rb.translation()) : null, zone: 'home_yard', stand: p.site.pos, yaw: p.site.yaw };
+  }
+
+  /**
+   * 🚀 GO FOR IT: straight from the bench to a running test. The machine sets itself
+   * down at the problem (or wherever it was tested last), facing it, and starts.
+   */
+  private goForIt(bp: Blueprint) {
+    const a = this.area();
+    const last = this.benchSpot && machineFits(this.sim, bp, this.benchSpot.placement) ? this.benchSpot : null;
+    const placement = last?.placement ?? autoSpot(this.sim, bp, a);
+    if (!placement) {
+      this.toasts.show('Couldn’t find a spot for it. Set it down yourself!', '', 2600);
       this.benchDone(bp);
       return;
     }
+    const spot: TestSpot = last ?? { placement, player: a.stand, yaw: a.yaw };
     this.leaveBench();
     this.bench = newBlueprint();
     this.benchSpot = null;
-    const m = this.sim.addMachine(bp, spot.placement);
+    const m = this.sim.addMachine(bp, placement);
     this.spots.set(m.id, spot);
     this.sim.teleportPlayer(spot.player, spot.yaw);
     this.enterExplore();
-    this.audio.play('attach', new THREE.Vector3(...spot.placement.pos));
+    this.audio.play('attach', new THREE.Vector3(...placement.pos));
+    this.fx.emit('dust', new THREE.Vector3(placement.pos[0], 0.05, placement.pos[2]), 14);
     this.go();
     this.persist();
+  }
+
+  /** ↺ RETRY: stop, put everything back where it started, and run it again. */
+  private retry() {
+    this.startOver();
+    this.go();
   }
 
   /** Walk-free trip to the workbench. */
@@ -985,7 +1007,7 @@ export class Game {
       const turn = (Math.PI / 4) * step;
       const np = pos.clone().sub(c).applyAxisAngle(up, turn).add(c);
       const pl: MachinePlacement = { pos: [np.x, np.y, np.z], yaw: m.placement.yaw + turn };
-      if (!this.machineFits(m.bp, pl)) continue;
+      if (!machineFits(this.sim, m.bp, pl)) continue;
       const spot = this.spots.get(m.id);
       this.sim.removeMachine(m.id);
       const fresh = this.sim.addMachine(m.bp, pl);
@@ -1004,7 +1026,7 @@ export class Game {
     const b = blueprintBounds(this.bench);
     for (const [x, z] of [[wb.pos[0] + 0.3, wb.pos[2] + 2.2], [wb.pos[0] + 0.3, wb.pos[2] - 2.2], [wb.pos[0] + 2.2, wb.pos[2] + 2.5]]) {
       const pl: MachinePlacement = { pos: [x, -b.min.y + 0.03, z], yaw: 0 };
-      if (this.machineFits(this.bench, pl)) {
+      if (machineFits(this.sim, this.bench, pl)) {
         this.sim.addMachine(this.bench, pl);
         this.toasts.show('I set the bench machine down on the garage floor.', '', 2600);
         this.bench = newBlueprint();
@@ -1069,42 +1091,10 @@ export class Game {
     const mid = b.min.clone().add(b.max).multiplyScalar(0.5).setY(0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
     const pos: [number, number, number] = [target.x - mid.x, groundY - b.min.y + 0.01, target.z - mid.z];
     c.placement = { pos, yaw };
-    c.valid = this.machineFits(c.bp, c.placement) && Math.hypot(target.x - eye.x, target.z - eye.z) > 0.5;
+    c.valid = machineFits(this.sim, c.bp, c.placement) && Math.hypot(target.x - eye.x, target.z - eye.z) > 0.5;
     c.view.group.position.set(...pos);
     c.view.group.rotation.set(0, yaw, 0);
     c.view.setGhost(c.valid ? null : 0xff4030);
-  }
-
-  /** Does the machine overlap walls, fences, trees...? */
-  private machineFits(bp: Blueprint, pl: MachinePlacement): boolean {
-    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.yaw);
-    const base = { p: new THREE.Vector3(...pl.pos), q };
-    const world = this.sim.physics.world;
-    for (const p of bp.parts) {
-      const def = getPart(p.def);
-      if (def.link) continue;
-      const pp = partPose(p);
-      const wp = { p: pp.p.clone().applyQuaternion(q).add(base.p), q: q.clone().multiply(pp.q) };
-      for (const o of partOBBs(def, wp, 0.015)) {
-        const rot = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(o.axes[0], o.axes[1], o.axes[2]));
-        const shape = new RAPIER.Cuboid(o.h[0], o.h[1], o.h[2]);
-        let hitStatic = false;
-        world.intersectionsWithShape(
-          { x: o.c.x, y: o.c.y + 0.02, z: o.c.z },
-          { x: rot.x, y: rot.y, z: rot.z, w: rot.w },
-          shape,
-          () => {
-            hitStatic = true;
-            return false;
-          },
-          undefined,
-          groups(0xffff, GROUP.STATIC),
-        );
-        if (hitStatic) return false;
-      }
-    }
-    void obbBounds;
-    return true;
   }
 
   private placeCarried() {
@@ -1241,13 +1231,13 @@ export class Game {
       h(
         'div',
         { class: 'row' },
-        btn('⟲ Reset', () => {
-          if (this.running) this.resetRun();
+        this.running ? btn('■ Stop', () => {
+          this.resetRun();
           this.hideResults();
-        }, 'small'),
-        this.sim.itemByTag('target') ? btn('↺ Start over', () => this.startOver(), 'small') : null,
+        }, 'small') : null,
+        canTweak ? btn('↺ Retry', () => this.retry(), 'small') : null,
         r.fix === 'turn' && canTweak ? btn(`↻ Turn it toward the ${this.projectId ? PROJECT_MAP[this.projectId].target : 'target'}`, () => this.turnMachine(true), 'small primary') : null,
-        canTweak ? btn('🔧 Tweak it', () => this.tweakMachine(), r.fix ? 'small' : 'small primary') : null,
+        canTweak ? btn('🔧 Back to build', () => this.tweakMachine(), r.fix ? 'small' : 'small primary') : null,
       ),
     );
     this.resultsEl.classList.remove('hidden');
@@ -1489,7 +1479,9 @@ export class Game {
         if (this.sim.carried) this.throwItem();
         break;
       case 'g':
-        if (!this.running && this.mode === 'explore') this.go();
+        if (this.mode !== 'explore') break;
+        if (!this.running) this.go();
+        else if (this.projectId && !this.sandbox) this.retry();
         break;
       case 'r':
         if (this.mode === 'carry') this.rotateCarried();
@@ -1508,7 +1500,7 @@ export class Game {
         if (!this.running && this.mode === 'explore') this.goToBench();
         break;
       case 't':
-        if (!this.running && this.mode === 'explore') this.tweakMachine();
+        if (this.mode === 'explore') this.tweakMachine();
         break;
       case 'y':
         if (!this.running && this.mode === 'explore') this.turnMachine();

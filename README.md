@@ -14,9 +14,9 @@ You can build an RC car that drives under the gap in the fence and drags the bal
 
 - **Understand.** Each project states the real problem, what the machine needs to do (never how), the one new idea it's about (REACH, AIM, PUSH…) and its **parts bin**: a curated handful of parts waiting at the bench. No blueprint, no single right answer. Tap the project card any time to see it again.
 - **Build.** Placement is forgiving: generous snap radii, the part it will join glows, and a tag by your finger says how it connects (*sticks to*, *spins on*, *swings on*, *driven by*). A new part aims at your machine first, heavy parts near the middle and wheels on the sides. Parts that would poke below the bench lift the machine instead of being refused. Every snap clunks or ratchets, with a ring and a haptic tick.
-- **Test.** No checklist: if it holds together, it runs. The big **▶ TEST** button is always one tap away, and 🏃 takes you straight to the problem.
+- **Test.** No checklist: if it holds together, it runs. **🚀 GO FOR IT** on the bench sets the machine down at the problem by itself (in front of the gap, at the shed edge, under the kite), facing it, and starts it. No carrying. (📍 *Place it myself* is still there for picking your own spot.) While it runs: **■ STOP**, **↺ RETRY** (everything back to the start, run again) and **🔧 BUILD** (back to the bench).
 - **Learn.** A probe watches every run and the **test results** card shows a few gauges (Reach, Grip, Push, Stability, Power) plus one plain observation generated from the physics: *"It didn't reach. The closest it got was 0.6 m from the ball."*, *"The shop vac was close enough, but it was pointing away from the ball."*, *"It was trying, but the battery couldn't keep up."*, *"The kite is free! Now it just has to come down."* Never a score, never "fail".
-- **Change one thing.** ↻ **Turn** spins a machine on the spot (from the results card it turns it toward the target); 🔧 **Tweak** takes the machine back to the bench and remembers where it stood; **▶ TEST** puts it straight back there and runs it.
+- **Change one thing.** ↻ **Turn** spins a machine on the spot (from the results card it turns it toward the target); 🔧 **Build** takes the machine back to the bench and remembers where it stood; **🚀 GO FOR IT** puts it straight back there and runs it.
 - **Stuck?** 💡 opens optional help, never shown unasked: a few "what are you thinking?" nudges (Reach, Pull, Drive, Grab), then four hints that go from a broad clue to a specific suggestion. After the last one you can ask for a step-by-step build.
 
 The **sandbox** unlocks after the first project: every part, unlimited, no rules.
@@ -33,9 +33,9 @@ npm run dev        # http://localhost:5173
 | Move / look | WASD + mouse (click to capture) | Left thumb moves (push far to run), right thumb looks |
 | Use / pick up / build | `E` | Context button |
 | Drop / throw | `Q` / `F` | Buttons |
-| Test machines / reset | `G` / `R` | ▶ TEST / ⟲ RESET |
+| Test machines / stop | `G` / `R` | 🚀 GO FOR IT or ▶ TEST / ■ STOP |
 | Camera, drive/walk, RC switch, replay | `C`, `Tab`, `X`, `V` | Buttons |
-| Bench, test, tweak, turn, hints | `B`, `G`, `T`, `Y`, `H` | 🔧 BENCH, ▶ TEST, 🔧 TWEAK, ↻ TURN, 💡 |
+| Bench, test / retry, back to build, turn, hints | `B`, `G`, `T`, `Y`, `H` | 🔧 BENCH, ▶ TEST / ↺ RETRY, 🔧 BUILD, ↻ TURN, 💡 |
 | Workbench | Pick a part and hover where you want it: it auto-fits onto the nearest lock point in its most natural pose (wheels on axles, motors shaft-out). Click to place. `Q`/`E`/`Z`/`X`/`F` switch to fine tune (spin, tilt, mount side); arrows jump between lock points. Select a placed part and press `M` to move it | Tap a part in the parts bin to pick it up (swiping the bin just scrolls). It starts on your machine; drag the ghost, or swipe a part straight up out of the bin, to where it should connect and let go: it clicks on in the most natural pose. Or tap a spot to move the ghost there, then tap the ghost or ✔ PLACE. One finger anywhere else turns the view. 🎯 Fine tune adds a d-pad, spin and tilt. Tap a placed part twice (or ✥ Move) to pick it back up |
 
 Add `?q=low` to the URL for low graphics (no shadows or grass).
