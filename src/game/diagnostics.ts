@@ -358,7 +358,7 @@ export function analyze(s: RunStats, project: ProjectDef | null): TestReport {
   }
   if (s.snaps && s.lastSnap) return say(`SNAP. The ${getPart(s.lastSnap).name.toLowerCase()} couldn’t take the pull.`, 'Something lighter, or a shorter pull?');
   if (s.maxTilt > 100) return say('It flipped right over. Interesting!', 'Try a wider base, or something heavy down low.');
-  if (s.snagged && s.unsnagged && s.goalEnd > 0.3) return say(`The ${what} is free! Now it just has to come down.`, 'What happens when the push stops? (RESET)', 'close');
+  if (s.snagged && s.unsnagged && s.goalEnd > 0.3) return say(`The ${what} is free! Now it just has to come down.`, 'What happens when the push stops? (■ STOP)', 'close');
   if (s.snagged && !s.unsnagged && s.pushPeak >= 0.45) return say(`The ${what} shook, but it’s still snagged. Almost!`, 'A bit more push? Closer, or stronger?', 'close');
   if (s.grabbed && s.lostGrip > 0 && !s.heldAtEnd) return say(`It grabbed the ${what}… and then lost its grip.`, 'Hold it tighter, or pull more gently?', 'close');
   if (s.hasTarget && closer > 0.3) return say(`The ${what} came ${m1(closer)} closer, but not all the way.`, s.goalEnd < 1 ? 'SO close. One small change?' : 'More power, or start closer?', 'close');

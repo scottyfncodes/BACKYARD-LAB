@@ -75,6 +75,8 @@ export interface ProjectDef {
   goalBelow?: number;
   /** A good place to stand and set a machine down near the problem. */
   site: { label: string; pos: V3; yaw: number };
+  /** Where GO FOR IT sets a machine down to work: in front of the gap, under the kite... */
+  approach: V3;
   stage: number;
   props: SpawnDef[];
   snags?: SnagDef[];
@@ -119,6 +121,7 @@ export const PROJECTS: ProjectDef[] = [
     target: 'ball',
     goalZone: 'home_yard',
     site: { label: 'TO THE FENCE', pos: [12.2, 0, 4.8], yaw: -Math.PI / 2 },
+    approach: [15, 0, 4.8],
     stage: 1,
     props: [{ part: 'playground_ball', pos: [16.5, 0.11, 5.6], tag: 'target' }],
     gateLocked: true,
@@ -163,6 +166,7 @@ export const PROJECTS: ProjectDef[] = [
     target: 'ball',
     goalZone: 'home_yard',
     site: { label: 'TO THE SHED', pos: [-5.2, 0, 10.4], yaw: Math.PI / 2 },
+    approach: [-7.9, 0, 11.2],
     stage: 1,
     props: [{ part: 'tennis_ball', pos: [-9.3, 0.034, 11.2], tag: 'target' }],
     gateLocked: true,
@@ -206,6 +210,7 @@ export const PROJECTS: ProjectDef[] = [
     goalZone: 'home_yard',
     goalBelow: 0.7,
     site: { label: 'TO THE TREE', pos: [9.6, 0, 9.4], yaw: Math.atan2(1.55, 1.74) },
+    approach: [8.05, 0, 7.66],
     stage: 1,
     props: [{ part: 'kite', pos: [8.05, 2.93, 7.66], rot: [90, 0, 35], tag: 'target' }],
     snags: [{ tag: 'target', anchor: [8.05, 3.35, 7.66], breakForce: 12 }],

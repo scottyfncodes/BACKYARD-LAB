@@ -51,10 +51,8 @@ export interface BuildHost {
   hints: boolean;
   /** Carry the machine out and pick a spot for it. */
   onDone(bp: Blueprint): void;
-  /** Put it straight back where it was last tested, and test it. */
+  /** GO FOR IT: set it down at the problem (or where it was last tested) and start it. */
   onTestOut(bp: Blueprint): void;
-  /** There is a spot to put it back to. */
-  hasSpot(): boolean;
   onExit(bp: Blueprint): void;
   /** Quick try right here on the bench. */
   onTest(bp: Blueprint): void;
@@ -309,16 +307,16 @@ export class BuildMode {
     this.renderGo();
   }
 
-  /** The big TEST button: always one tap from "I have an idea" to "let's see". */
+  /** The big GO FOR IT button: one tap from "I built it" to watching it try. */
   private renderGo() {
     const show = !this.testing && !this.holding && this.bp.parts.length > 0;
     this.goBox.classList.toggle('hidden', !show);
     if (!show) return;
-    const b: HTMLElement[] = [btn('⚙ Try it here', () => this.test(), 'small')];
-    if (this.host.hasSpot()) {
-      b.push(btn('📍 New spot', () => this.done(), 'small'));
-      b.push(btn('▶ TEST', () => this.testOut(), 'go test-btn'));
-    } else b.push(btn('📍 TAKE IT OUT', () => this.done(), 'go test-btn'));
+    const b: HTMLElement[] = [
+      btn('⚙ Try it here', () => this.test(), 'small'),
+      btn('📍 Place it myself', () => this.done(), 'small'),
+      btn('🚀 GO FOR IT', () => this.testOut(), 'go test-btn'),
+    ];
     this.goBox.replaceChildren(...b);
   }
 
@@ -1489,7 +1487,7 @@ export class BuildMode {
     this.refresh();
   }
 
-  /** ▶ TEST: straight back to where it was last tried, and go. */
+  /** 🚀 GO FOR IT: out to the problem and running, no carrying. */
   private testOut() {
     if (!this.bp.parts.length) return;
     const err = validateBlueprint(this.bp).find((i) => i.severity === 'error');
