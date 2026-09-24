@@ -68,6 +68,24 @@ describe('test results come from what the physics did', () => {
     expect(report.observation).toMatch(/didn’t reach.*\d\.\d m/);
   });
 
+  it('close enough but aimed sideways: it says the vacuum was pointing away (AIM)', () => {
+    // Nozzle faces machine +z; yaw 0 points it along the fence instead of at the ball.
+    const { report, stats } = trial(PROJECT_MAP.ball_over_fence, vac(), 14.2, 4.85, 0, 4);
+    expect(stats.success).toBe(false);
+    expect(stats.aimOff!).toBeGreaterThan(35);
+    expect(report.observation).toMatch(/pointing away from the ball/);
+    expect(report.tryNext).toMatch(/Turn it/);
+  });
+
+  it('aimed straight at the ball through the solid fence: something is in the way', () => {
+    const at = { x: 14.2, z: 3.3 };
+    const yaw = Math.atan2(16.5 - at.x, 5.6 - at.z);
+    const { report, stats } = trial(PROJECT_MAP.ball_over_fence, vac(), at.x, at.z, yaw, 4);
+    expect(stats.success).toBe(false);
+    expect(stats.airBlocked).toBe(true);
+    expect(report.observation).toMatch(/in the way/);
+  });
+
   it('motors with no battery: nothing happens, and it says a battery is missing', () => {
     const b = new Builder();
     const pl = b.free('plank');
@@ -119,6 +137,8 @@ describe('results never grade the player', () => {
     { hasTarget: true, closest: 0 },
     { hasTarget: true, closest: 2.2, machineMoved: 1 },
     { hasTarget: true, closest: 2.2 },
+    { hasTarget: true, closest: 1.2, airPart: 'vacuum', aimOff: 80 },
+    { hasTarget: true, closest: 1.2, airPart: 'box_fan', aimOff: 5, airBlocked: true },
   ];
   it('every observation, tip and gauge note is curious, not judgmental', () => {
     for (const p of [...PROJECTS, null]) {

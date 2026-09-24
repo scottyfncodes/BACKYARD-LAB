@@ -2,8 +2,9 @@ import type { V3 } from './parts';
 
 /**
  * "Ideas": optional guided builds, like a page of Lego instructions. They are
- * never the only answer; they just get a first-time builder unstuck. Each step
- * says what goes where, relative to earlier steps.
+ * never the only answer, and only offered after the last hint, when a builder
+ * has asked for all the help there is. Each step says what goes where,
+ * relative to earlier steps.
  */
 export interface IdeaStep {
   part: string;
@@ -54,32 +55,3 @@ export const IDEAS: Idea[] = [
 export function ideasFor(projectId: string | null): Idea[] {
   return IDEAS.filter((i) => (projectId ? i.projects.includes(projectId) : true));
 }
-
-/** Where a first-timer can find each piece of junk in the yard. */
-export const WHERE: Record<string, string> = {
-  plank: 'the junk pile by the garage',
-  crate: 'the junk pile by the garage',
-  broom: 'the garage',
-  skateboard: 'the lawn near the sandbox',
-  bucket: 'the junk pile or the garden',
-  lawn_wheel: 'the junk pile by the garage',
-  bike_wheel: 'next to the shed',
-  motor: 'the lab bench',
-  battery_small: 'the lab bench',
-  battery_car: 'the back of the garage',
-  box_fan: 'the deck',
-  vacuum: 'the garage',
-  balloons: 'the deck (tied to the table)',
-  rope: 'next to the shed',
-  bungee: 'next to the shed',
-  spring: 'the junk pile by the garage',
-  hinge: 'the lab bench and shelf',
-  duct_tape: 'the lab bench',
-  bottle_rocket: 'the end of the deck',
-  timer: 'the lab shelf',
-  pressure_plate: 'the back door (it is the doormat)',
-  rc_receiver: 'the toy box on the deck',
-  winch: 'the back of the garage',
-  trampoline: 'the lawn',
-  brick: 'the garden bed',
-};

@@ -1,8 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
-import { IDEAS, WHERE } from '../src/data/ideas';
+import { IDEAS } from '../src/data/ideas';
 import { getPart } from '../src/data/parts';
-import { WORLD } from '../src/data/world';
 import { Builder } from '../src/sim/blueprint';
 import { initPhysics } from '../src/sim/physics';
 import { emptyInput, Simulation } from '../src/sim/simulation';
@@ -40,15 +39,7 @@ describe('ideas (guided builds)', () => {
     expect(m.center().distanceTo(new Vector3(0, m.center().y, 0))).toBeGreaterThan(2);
   });
 
-  it('every part an idea needs actually exists in the yard, and we say where', () => {
-    for (const idea of IDEAS) {
-      const need = new Map<string, number>();
-      for (const st of idea.steps) need.set(st.part, (need.get(st.part) ?? 0) + 1);
-      for (const [id, n] of need) {
-        expect(WORLD.junk.filter((j) => j.part === id).length, `${idea.id} needs ${n} ${id}`).toBeGreaterThanOrEqual(n);
-        expect(WHERE[id], `where is ${id}`).toBeTruthy();
-        expect(getPart(id).buildable).toBe(true);
-      }
-    }
+  it('every part an idea needs is real building material (the bins are checked in projects.test)', () => {
+    for (const idea of IDEAS) for (const st of idea.steps) expect(getPart(st.part).buildable).toBe(true);
   });
 });

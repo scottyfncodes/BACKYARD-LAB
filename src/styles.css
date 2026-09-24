@@ -712,7 +712,13 @@ body.has-results .actions.right, body.has-results .thought { display: none !impo
   .bench-go { bottom: calc(112px + var(--safe-b)); }
   .tray-label { bottom: calc(98px + var(--safe-b)); }
   .btn.test-btn { font-size: 19px; min-height: 54px; }
-  .results { width: min(60vw, 440px); left: auto; right: calc(10px + var(--safe-r)); transform: none; max-height: calc(100% - 20px); }
+  .results { width: min(58vw, 480px); left: auto; right: calc(10px + var(--safe-r)); top: calc(62px + var(--safe-t)); bottom: auto; transform: none; max-height: calc(100% - 70px - var(--safe-t) - var(--safe-b)); padding: 6px 12px 8px; }
+  .gauge { grid-template-columns: 70px 1fr 104px; grid-template-rows: auto; }
+  .gauge b { grid-row: auto; font-size: 13px; }
+  .gauge small { text-align: right; }
+  .results p.obs { font-size: 14px; }
+  .results p.try { font-size: 13px; }
+  .results .row .btn { min-height: 40px; }
   @keyframes slide-up { from { opacity: 0; } }
   .gauge-bar { height: 11px; }
 }
@@ -739,3 +745,6 @@ body.has-results .actions.right, body.has-results .thought { display: none !impo
   body.building .thought { top: calc(64px + var(--safe-t)); left: calc(12px + var(--safe-l)); transform: rotate(-1deg); max-width: 36vw; font-size: 14px; padding: 6px 12px; }
   body:not(.building) .thought { left: calc(12px + var(--safe-l)); transform: rotate(-1deg); max-width: 44vw; bottom: calc(16px + var(--safe-b)); }
 }
+.stage-ideas { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.stage-ideas .concept { font-size: 10px; padding: 2px 8px; }
+.stage.locked .stage-ideas .concept { background: #8a7a66; }

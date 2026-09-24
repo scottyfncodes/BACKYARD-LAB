@@ -296,12 +296,15 @@ export class Game {
     const stages = STAGES.map((st) => {
       const projects = PROJECTS.filter((p) => p.stage === st.n);
       const done = projects.filter((p) => s.completed[p.id]).length;
+      // The ideas each stage teaches, one per project: learned, and still to come.
+      const ideas = projects.length ? projects.map((p) => (s.completed[p.id] ? `✓ ${p.concept.name}` : p.concept.name)) : (st.ideas ?? []);
       return h(
         'div',
         { class: `stage ${projects.length ? '' : 'locked'}` },
         h('b', {}, `Stage ${st.n}: ${st.name}`),
         h('div', { class: 'muted' }, st.tagline),
         projects.length ? h('div', {}, `${done}/${projects.length} projects solved`) : h('div', { class: 'muted' }, `Coming later: ${st.teasers.join(' · ')}`),
+        ideas.length ? h('div', { class: 'stage-ideas' }, ...ideas.map((i) => h('span', { class: 'concept' }, i))) : null,
       );
     });
     this.modal.show([
@@ -339,7 +342,7 @@ export class Game {
       h(
         'p',
         { class: 'muted' },
-        'Desktop: WASD move · mouse look · E use · Q drop · F throw · G go · R reset/rotate · C camera · Tab drive/walk · V replay · Space jump',
+        'Desktop: WASD move · mouse look · E use · B bench · G test · T tweak · H hints · Q drop · F throw · R reset/turn · C camera · Tab drive/walk · V replay · Space jump',
       ),
       h('p', { class: 'muted' }, 'Touch: left thumb moves (push far to run), right thumb looks. Buttons do the rest.'),
       h('div', { class: 'row' }, btn('Back', back)),
@@ -711,7 +714,7 @@ export class Game {
     const look = this.lookTarget();
     if (this.mode === 'carry' && this.carrying) {
       a.push({ id: 'place', label: `📍 PLACE${k('E')}`, cls: this.carrying.valid ? 'primary' : '', onPress: () => this.placeCarried() });
-      a.push({ id: 'rot', label: `↻${k('R')}`, onPress: () => this.rotateCarried() });
+      a.push({ id: 'rot', label: `↻ TURN${k('R')}`, onPress: () => this.rotateCarried() });
       const site = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId].site : null;
       if (site && this.distTo(site.pos) > 3) a.push({ id: 'site', label: `🏃 ${site.label}`, onPress: () => this.goToSite() });
       if (this.nearBench() && !this.bench.parts.length) a.push({ id: 'tobench', label: '🔧 ON BENCH', onPress: () => this.carriedToBench() });
@@ -752,6 +755,7 @@ export class Game {
     } else if (this.frozenMachines().length && this.mode === 'explore') {
       a.push({ id: 'go', label: `▶ TEST${k('G')}`, cls: 'go test-btn', onPress: () => this.go() });
       a.push({ id: 'tweak', label: `🔧 TWEAK${k('T')}`, onPress: () => this.tweakMachine() });
+      a.push({ id: 'turn', label: `↻ TURN${k('Y')}`, onPress: () => this.turnMachine() });
     }
     if (!this.running && this.replay.available && this.mode === 'explore') a.push({ id: 'replay', label: `⏺ REPLAY${k('V')}`, onPress: () => this.startReplay() });
     return a;
@@ -949,6 +953,50 @@ export class Game {
     this.audio.play('pickup');
     this.goToBench();
     this.persist();
+  }
+
+  /** ↻ TURN: spin a machine standing in the yard 45° on the spot, so aiming never needs a trip to the bench. */
+  private turnMachine(towardTarget = false) {
+    if (this.running) this.resetRun();
+    const look = this.lookTarget();
+    const candidates = this.frozenMachines();
+    const m = look?.kind === 'machine' && candidates.includes(look.machine) ? look.machine : candidates[candidates.length - 1];
+    if (!m) return;
+    this.hideResults();
+    const b = blueprintBounds(m.bp);
+    const mid = b.min.clone().add(b.max).multiplyScalar(0.5).setY(0);
+    const up = new THREE.Vector3(0, 1, 0);
+    const pos = new THREE.Vector3(...m.placement.pos);
+    const c = mid.clone().applyAxisAngle(up, m.placement.yaw).add(pos);
+    // Toward the target: the nearest 45° step that points its vacuum / fan at it. Otherwise one step round.
+    let steps = [1, 2, 3];
+    const target = this.sim.itemByTag('target');
+    const air = m.bp.parts.find((p) => getPart(p.def).behaviors.some((x) => x.type === 'suction' || x.type === 'airflow'));
+    if (towardTarget && target && air) {
+      const beh = getPart(air.def).behaviors.find((x) => x.type === 'suction' || x.type === 'airflow')!;
+      const wp = m.partWorldPose(air.uid)!;
+      const axis = new THREE.Vector3(...(beh as { axis: [number, number, number] }).axis).applyQuaternion(wp.q).setY(0);
+      const to = toV(target.rb.translation()).sub(wp.p).setY(0);
+      const ang = Math.atan2(axis.clone().cross(to).y, axis.dot(to));
+      const n = Math.round(ang / (Math.PI / 4)) || Math.sign(ang) || 1;
+      steps = [n, n + Math.sign(n), n - Math.sign(n)].filter((x) => x !== 0);
+    }
+    for (const step of steps) {
+      const turn = (Math.PI / 4) * step;
+      const np = pos.clone().sub(c).applyAxisAngle(up, turn).add(c);
+      const pl: MachinePlacement = { pos: [np.x, np.y, np.z], yaw: m.placement.yaw + turn };
+      if (!this.machineFits(m.bp, pl)) continue;
+      const spot = this.spots.get(m.id);
+      this.sim.removeMachine(m.id);
+      const fresh = this.sim.addMachine(m.bp, pl);
+      this.spots.set(fresh.id, { placement: pl, player: spot?.player ?? this.feet(), yaw: spot?.yaw ?? this.yaw });
+      this.spots.delete(m.id);
+      this.audio.play('ratchet', c);
+      this.persistSoon();
+      return;
+    }
+    this.toasts.show('No room to turn it here.', '', 2000);
+    this.audio.play('error');
   }
 
   private parkBench() {
@@ -1198,7 +1246,8 @@ export class Game {
           this.hideResults();
         }, 'small'),
         this.sim.itemByTag('target') ? btn('↺ Start over', () => this.startOver(), 'small') : null,
-        canTweak ? btn('🔧 Tweak it', () => this.tweakMachine(), 'small primary') : null,
+        r.fix === 'turn' && canTweak ? btn(`↻ Turn it toward the ${this.projectId ? PROJECT_MAP[this.projectId].target : 'target'}`, () => this.turnMachine(true), 'small primary') : null,
+        canTweak ? btn('🔧 Tweak it', () => this.tweakMachine(), r.fix ? 'small' : 'small primary') : null,
       ),
     );
     this.resultsEl.classList.remove('hidden');
@@ -1461,6 +1510,9 @@ export class Game {
       case 't':
         if (!this.running && this.mode === 'explore') this.tweakMachine();
         break;
+      case 'y':
+        if (!this.running && this.mode === 'explore') this.turnMachine();
+        break;
       case 'h':
         this.showHints();
         break;
@@ -1526,7 +1578,7 @@ export class Game {
     if (steps === 6) this.acc = 0;
     this.handleEvents();
     if (this.running || this.testMachine !== null) {
-      this.journal.sample(this.sim, dt, this.lastThrottle);
+      this.journal.sample(this.sim, dt);
       if (this.running) this.probe.sample(this.sim, dt);
       // Everything has come to rest: show what the test found (the machine stays as it ended up).
       if (this.running && this.journal.settled && !this.verdictShown && !this.succeeded && Math.abs(this.lastThrottle) < 0.1) {

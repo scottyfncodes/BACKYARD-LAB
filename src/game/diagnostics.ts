@@ -40,6 +40,11 @@ export interface RunStats {
   /** Peak tug on a snagged target as a fraction of what it takes to tear it loose. */
   pushPeak: number;
   targetTopSpeed: number;
+  /** A vacuum or fan on the machine: how close to the target its air ever pointed (degrees, while in range). */
+  airPart: string | null;
+  aimOff: number | null;
+  /** Its air pointed at the target, in range, but something solid was in between. */
+  airBlocked: boolean;
   maxTilt: number; // degrees
   breaks: number;
   lastBreak: { part: string; other: string } | null;
@@ -70,6 +75,8 @@ export interface TestReport {
   observation: string;
   tryNext: string | null;
   mood: 'worked' | 'close' | 'learned';
+  /** A one-tap next step the results card can offer, when the fix is that obvious. */
+  fix?: 'turn';
 }
 
 export function emptyStats(): RunStats {
@@ -92,6 +99,9 @@ export function emptyStats(): RunStats {
     unsnagged: false,
     pushPeak: 0,
     targetTopSpeed: 0,
+    airPart: null,
+    aimOff: null,
+    airBlocked: false,
     maxTilt: 0,
     breaks: 0,
     lastBreak: null,
@@ -244,18 +254,33 @@ export class TestProbe {
           for (let i = 0; i < 3; i++) q.addScaledVector(o.axes[i], Math.max(-o.h[i], Math.min(o.h[i], d.dot(o.axes[i]))));
           best = Math.min(best, Math.max(0, q.distanceTo(tp) - tr));
         }
-        // A vacuum or fan "reaches" as far as its air does.
+        // A vacuum or fan "reaches" as far as its air does, if it points the right way and nothing is in between.
         for (const b of part.def.behaviors) {
           if (b.type !== 'suction' && b.type !== 'airflow') continue;
           const origin = new Vector3(...b.at).applyQuaternion(wp.q).add(wp.p);
           const axis = new Vector3(...b.axis).applyQuaternion(wp.q).normalize();
           const d = tp.clone().sub(origin);
+          const dist = d.length();
           const along = d.dot(axis);
+          const inRange = dist <= b.range;
+          // Aim is judged from the tool itself, so facing right away still counts as "close enough, wrong way".
+          const fromBody = tp.clone().sub(wp.p);
+          if (fromBody.length() <= b.range + 0.3 && fromBody.length() > 1e-3) {
+            this.stats.airPart = part.def.id;
+            const off = (fromBody.angleTo(axis) * 180) / Math.PI;
+            this.stats.aimOff = Math.min(this.stats.aimOff ?? Infinity, off);
+          }
           if (along < 0) continue;
           const lateral = d.clone().addScaledVector(axis, -along).length();
           if (lateral > Math.tan((b.cone * Math.PI) / 180) * along + 0.3) continue;
-          if (sim.physics.blockedByStatic(origin, tp)) continue;
-          best = Math.min(best, Math.max(0, d.length() - b.range * 0.85));
+          if (sim.physics.blockedByStatic(origin, tp)) {
+            if (inRange) {
+              this.stats.airBlocked = true;
+              this.stats.airPart = part.def.id;
+            }
+            continue;
+          }
+          best = Math.min(best, Math.max(0, dist - b.range * 0.85));
         }
       }
     }
@@ -341,6 +366,12 @@ export function analyze(s: RunStats, project: ProjectDef | null): TestReport {
   if (s.maxTilt > 45) return say('The machine lost its balance and tipped.', 'Try a wider base, or something heavy down low.');
   if (s.hasTarget && s.targetMoved > 0.25 && !s.playerHandled) return say(`The ${what} moved, but not toward home.`, 'Change the angle and try again?');
   if (s.hasTarget && s.closest <= 0.05) return say(`It reached the ${what}, but didn’t move it.`, 'It needs a way to grab, pull or push it.', 'close');
+  // Air tools: close enough, but aimed off, or blocked by something solid.
+  if (s.hasTarget && s.airPart && s.targetMoved < 0.25) {
+    const tool = getPart(s.airPart).name.toLowerCase();
+    if (s.aimOff !== null && s.aimOff > 35) return { ...say(`The ${tool} was close enough, but it was pointing away from the ${what}.`, `Turn it to point right at the ${what}?`, 'close'), fix: 'turn' };
+    if (s.airBlocked) return say(`The ${tool} was pointed at the ${what}, but something solid was in the way.`, 'Find a clear path to it?', 'close');
+  }
   if (s.hasTarget && Number.isFinite(s.closest)) {
     if (s.machineMoved < 0.05 && !s.powered) return say('Nothing moved. Machines need something to make them go: a motor, a fan, a spring, a rocket…', 'What would make it move?');
     return say(`It didn’t reach. The closest it got was ${m1(s.closest)} from the ${what}.${alsoWeak}`, s.closest > 1.5 ? 'Start closer, or build something longer?' : 'A little more reach?');
