@@ -1,12 +1,12 @@
 // Offline support: cache the app shell on install, then serve cache-first and
 // refresh in the background so a new deploy shows up on the next launch.
-const CACHE = 'backyard-lab-v1';
+const CACHE = 'backyard-lab-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png']))
+      .then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png']))
       .then(() => self.skipWaiting()),
   );
 });
