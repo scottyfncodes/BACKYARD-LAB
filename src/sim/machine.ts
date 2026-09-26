@@ -377,7 +377,12 @@ export class MachineInstance {
     const a = this.linkEndWorld(x.a);
     const b = this.linkEndWorld(x.b);
     const rt: LinkRt = { ...x, id: linkIds++, tension: 0, prevLen: a.distanceTo(b), broken: false };
-    if (x.link.kind === 'rope') rt.rope = new RopeSim(a, b, x.length);
+    if (x.link.kind === 'rope') {
+      rt.rope = new RopeSim(a, b, x.length);
+      // Let the slack settle onto the ground now, so GO does not start with a jolt.
+      const { physics } = this.host;
+      for (let i = 0; i < 90; i++) rt.rope.step(a, b, 1 / 120, (p, r) => physics.pushOutOfStatic(p, r), 12);
+    }
     this.links.push(rt);
   }
 
@@ -783,7 +788,11 @@ export class MachineInstance {
         dirA = len > 1e-6 ? d.clone().divideScalar(len) : new Vector3(0, 1, 0);
         dirB = dirA.clone().negate();
       }
-      const rate = (len - l.prevLen) / dt;
+      // Stretch rate from the end points' relative velocity along the pull, not
+      // from the path length (a rope going taut would otherwise register a jolt).
+      const va = toV(pa.body.rb.velocityAtPoint({ x: a.x, y: a.y, z: a.z }));
+      const vb = toV(pb.body.rb.velocityAtPoint({ x: b.x, y: b.y, z: b.z }));
+      const rate = -(va.dot(dirA) + vb.dot(dirB));
       l.prevLen = len;
       if (pa.body === pb.body) {
         l.tension = 0;

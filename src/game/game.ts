@@ -1,16 +1,17 @@
 import * as THREE from 'three';
 import { Audio } from '../audio/audio';
 import { getPart, PART_MAP } from '../data/parts';
-import { PROJECT_MAP, PROJECTS, STAGES, type ProjectDef } from '../data/projects';
-import { EAST_FENCE_X, inZone, LOOK_HINTS, WORLD } from '../data/world';
+import { newKitParts, PROJECT_MAP, PROJECTS, type ProjectDef } from '../data/projects';
+import { EAST_FENCE_X, inZone, LOOK_HINTS } from '../data/world';
 import { buildEnvironment, type Environment } from '../render/environment';
-import { ideasFor } from '../data/ideas';
+import { ideaFor } from '../data/ideas';
 import { Effects } from '../render/effects';
 import { detectQuality, Renderer } from '../render/renderer';
+import { partThumb } from '../render/thumbs';
 import { BlueprintView, WorldView } from '../render/views';
 import { blueprintBounds, blueprintMass, clone, newBlueprint, partPose, type Blueprint } from '../sim/blueprint';
 import type { SimEvent } from '../sim/events';
-import { obbBounds, partOBBs } from '../sim/geom';
+import { partOBBs } from '../sim/geom';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
 import { GROUP, groups, RAPIER, toV } from '../sim/physics';
 import { emptyInput, PLAYER, Simulation, type Item, type SimInput } from '../sim/simulation';
@@ -24,9 +25,14 @@ import { completeProject, discover, loadSave, sandboxParts, totalBonuses, writeS
 
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
-const BENCH_ORIGIN = new THREE.Vector3(WORLD.workbench.pos[0], WORLD.workbench.top, WORLD.workbench.pos[2]);
 const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+const MAT_HALF = 0.9;
 
+/**
+ * The game loop. One idea: DISCOVER a problem, BUILD something from a small
+ * kit right where you stand, TEST it, LEARN from what happened, IMPROVISE,
+ * SOLVE. Everything here serves that loop.
+ */
 export class Game {
   r: Renderer;
   env: Environment;
@@ -43,8 +49,11 @@ export class Game {
   mode: Mode = 'title';
   projectId: string | null = null;
   sandbox = false;
+  /** The kit: part id -> how many are left to use. */
   stash = new Map<string, number>();
-  bench: Blueprint = newBlueprint();
+  /** Where the mat is while building, and which way it faces (machine +z). */
+  buildOrigin = new THREE.Vector3();
+  buildYaw = 0;
   carrying: { bp: Blueprint; view: BlueprintView; rot: number; placement: MachinePlacement | null; valid: boolean } | null = null;
   running = false;
   driving = true;
@@ -64,9 +73,11 @@ export class Game {
   private actionEdge = false;
   private saveTimer = 0;
   private hintTimer = 0;
+  private hintIndex = 0;
+  private failedRuns = 0;
   private lastLookKey = '';
-  private absorbedOnce = new Set<number>();
-  private ideaOffered = new Set<string>();
+  private ideaOffered = false;
+  private spot: { origin: THREE.Vector3; ok: boolean } = { origin: new THREE.Vector3(), ok: false };
 
   // UI
   ui: HTMLElement;
@@ -112,7 +123,7 @@ export class Game {
       if (document.hidden) this.persist();
     });
     this.resize();
-    this.newSim(PROJECT_MAP.ball_over_fence, false);
+    this.newSim(this.nextProject(), false);
     this.showTitle();
     requestAnimationFrame((t) => this.frame(t));
   }
@@ -124,13 +135,19 @@ export class Game {
 
   // ================================================================== setup
 
+  private nextProject(): ProjectDef {
+    return PROJECTS.find((p) => this.save.unlocked.includes(p.id) && !this.save.completed[p.id]) ?? PROJECTS[0];
+  }
+
   private newSim(project: ProjectDef | null, started = true) {
+    this.leaveBuild();
+    this.dropCarried();
     this.view?.root.removeFromParent();
     this.sim?.free();
     this.sim = new Simulation({ project: started ? project : null, gateOpen: !project });
     if (!started && project) {
-      // Title-screen backdrop: the prop sits where it will be.
-      for (const s of project.props) this.sim.spawnItem(s);
+      // Title-screen backdrop: the props sit where they will be.
+      for (const s of [...project.yard, ...project.props]) this.sim.spawnItem(s);
     }
     this.view = new WorldView(this.sim);
     this.r.scene.add(this.view.root);
@@ -138,8 +155,12 @@ export class Game {
     this.gateAnim = 0;
     this.running = false;
     this.succeeded = false;
+    this.testMachine = null;
+    this.failedRuns = 0;
+    this.hintIndex = 0;
+    this.hintTimer = 0;
+    this.ideaOffered = false;
     this.replay = new Replay();
-    this.absorbedOnce.clear();
   }
 
   private buildHost() {
@@ -170,20 +191,24 @@ export class Game {
       toasts: this.toasts,
       thought: this.thought,
       stash,
-      benchOrigin: BENCH_ORIGIN,
+      get benchOrigin() {
+        return self.buildOrigin;
+      },
+      get benchYaw() {
+        return self.buildYaw;
+      },
       get sandbox() {
         return self.sandbox;
       },
       get hints() {
         return self.save.settings.hints;
       },
-      onDone: (bp: Blueprint) => this.benchDone(bp),
-      onExit: (bp: Blueprint) => this.exitBuild(bp),
+      onDone: (bp: Blueprint) => this.leaveMat(bp),
       onTest: (bp: Blueprint) => this.startTest(bp),
       onStopTest: () => this.stopTest(),
       onChange: () => this.persistSoon(),
       creations: () => this.save.creations,
-      ideas: () => ideasFor(this.sandbox ? null : this.projectId),
+      idea: () => (this.sandbox ? null : ideaFor(this.projectId)),
       onBench: (d: string) => (this.stash.get(d) ?? 0) + this.build.bp.parts.filter((p) => p.def === d).length,
       saveCreation: (bp: Blueprint) => {
         this.save.creations.unshift({ name: bp.name, bp: clone(bp), savedAt: Date.now() });
@@ -212,9 +237,29 @@ export class Game {
     for (const el of [this.hudTop, this.reticle, this.prompt, this.actions.el, this.leftActions.el]) el.classList.toggle('hidden', !on);
   }
 
+  private kitRow(kit: Record<string, number>, highlight: string[] = []): HTMLElement {
+    const row = h('div', { class: 'kit' });
+    for (const [id, n] of Object.entries(kit)) {
+      const def = getPart(id);
+      const isNew = highlight.includes(id);
+      row.append(
+        h(
+          'div',
+          { class: `kit-item ${isNew ? 'new' : ''}`, title: def.hint },
+          h('img', { src: partThumb(this.r.renderer, id), alt: def.name }),
+          h('div', { class: 'kit-name' }, def.name),
+          n > 1 ? h('div', { class: 'count' }, String(n)) : null,
+          isNew ? h('div', { class: 'badge' }, 'NEW') : null,
+        ),
+      );
+    }
+    return row;
+  }
+
   // ================================================================== menus
 
   private showTitle() {
+    this.leaveBuild();
     this.mode = 'title';
     this.setHudVisible(false);
     this.input.unlockPointer();
@@ -226,18 +271,21 @@ export class Game {
     this.cam.set('free', true);
     const s = this.save;
     const sess = s.session;
-    const next = PROJECTS.find((p) => s.unlocked.includes(p.id) && !s.completed[p.id]) ?? PROJECTS[0];
+    const next = this.nextProject();
+    const solved = Object.keys(s.completed).length;
     const content: Node[] = [h('div', { class: 'logo' }, 'BACKYARD', h('span', {}, 'LAB'))];
-    content.push(h('p', { class: 'muted' }, 'A kid. A problem. A yard full of junk.'));
+    content.push(h('p', { class: 'muted' }, 'A kid. A problem. A handful of junk.'));
     const row = h('div', { class: 'row', style: 'flex-direction:column' });
     if (sess) {
       const label = sess.mode === 'sandbox' ? 'Sandbox' : PROJECT_MAP[sess.project!].title;
       row.append(btn(`▶ Continue — ${label}`, () => this.resume(), 'go'));
-    } else {
+    } else if (solved < PROJECTS.length) {
       row.append(btn(`▶ Play — ${next.title}`, () => this.startProject(next.id), 'go'));
+    } else {
+      row.append(btn('🧪 Sandbox', () => this.startSandbox(), 'go'));
     }
-    row.append(btn('📋 Projects', () => this.showProjects()));
-    row.append(btn(s.sandbox ? '🧪 Sandbox' : '🔒 Sandbox (finish a project)', () => (s.sandbox ? this.startSandbox() : this.audio.play('error'))));
+    row.append(btn('📋 Problems', () => this.showProjects()));
+    if (solved < PROJECTS.length) row.append(btn(s.sandbox ? '🧪 Sandbox' : '🔒 Sandbox (solve a problem first)', () => (s.sandbox ? this.startSandbox() : this.audio.play('error'))));
     row.append(btn('📓 Lab Notebook', () => this.showNotebook()));
     row.append(btn('⚙ Settings', () => this.showSettings(() => this.showTitle())));
     content.push(row);
@@ -246,17 +294,17 @@ export class Game {
 
   private showProjects(back: () => void = () => this.showTitle()) {
     const list = h('div', { class: 'projects' });
-    for (const p of PROJECTS) {
+    PROJECTS.forEach((p, i) => {
       const unlocked = this.save.unlocked.includes(p.id);
       const done = this.save.completed[p.id];
       const b = btn(
-        `<span>${unlocked ? '' : '🔒 '}${p.title}<br><small class="muted">${unlocked ? p.pitch[0] : 'Solve other projects first'}</small></span><span>${done ? '⭐'.repeat(Math.max(1, done.bonuses.length)) : ''}</span>`,
+        `<span>${unlocked ? '' : '🔒 '}${i + 1}. ${p.title}<br><small class="muted">${unlocked ? p.pitch[0] : 'Solve the one before it first'}</small></span><span>${done ? '⭐'.repeat(Math.max(1, done.bonuses.length)) : ''}</span>`,
         () => (unlocked ? this.startProject(p.id) : this.audio.play('error')),
         unlocked ? '' : 'ghost',
       );
       list.append(b);
-    }
-    this.modal.show([h('h2', {}, 'Projects'), list, h('div', { class: 'row' }, btn('Back', back))]);
+    });
+    this.modal.show([h('h2', {}, 'Problems'), list, h('div', { class: 'row' }, btn('Back', back))]);
   }
 
   private showNotebook(back: () => void = () => this.showTitle()) {
@@ -264,22 +312,13 @@ export class Game {
     const tb = totalBonuses(s);
     const found = s.discovered.length;
     const total = Object.values(PART_MAP).filter((p) => p.buildable).length;
-    const stages = STAGES.map((st) => {
-      const projects = PROJECTS.filter((p) => p.stage === st.n);
-      const done = projects.filter((p) => s.completed[p.id]).length;
-      return h(
-        'div',
-        { class: `stage ${projects.length ? '' : 'locked'}` },
-        h('b', {}, `Stage ${st.n}: ${st.name}`),
-        h('div', { class: 'muted' }, st.tagline),
-        projects.length ? h('div', {}, `${done}/${projects.length} projects solved`) : h('div', { class: 'muted' }, `Coming later: ${st.teasers.join(' · ')}`),
-      );
-    });
+    const lessons = PROJECTS.filter((p) => s.completed[p.id]).map((p) => h('div', { class: 'lesson' }, h('b', {}, p.title), h('div', {}, p.lesson)));
     this.modal.show([
       h('h2', {}, '📓 Lab Notebook'),
-      h('p', {}, `Junk discovered: ${found}/${total}`),
-      h('p', {}, `Bonus stars: ${tb.earned}/${tb.possible}`),
-      ...stages,
+      h('p', {}, `Problems solved: ${Object.keys(s.completed).length}/${PROJECTS.length} · Stars: ${tb.earned}/${tb.possible}`),
+      h('p', {}, `Junk I have used: ${found}/${total}`),
+      h('h3', {}, 'Things I have figured out'),
+      ...(lessons.length ? lessons : [h('p', { class: 'muted' }, 'Nothing yet. Go solve something.')]),
       h('div', { class: 'row' }, btn('Back', back)),
     ]);
   }
@@ -310,7 +349,7 @@ export class Game {
       h(
         'p',
         { class: 'muted' },
-        'Desktop: WASD move · mouse look · E use · Q drop · F throw · G go · R reset/rotate · C camera · Tab drive/walk · V replay · Space jump',
+        'Desktop: WASD move · mouse look · E use / build / tinker · F throw / pick up machine · Q drop · G go · R reset (or rotate while carrying) · C camera · Tab drive/walk · V replay · Space jump',
       ),
       h('p', { class: 'muted' }, 'Touch: left thumb moves (push far to run), right thumb looks. Buttons do the rest.'),
       h('div', { class: 'row' }, btn('Back', back)),
@@ -320,11 +359,13 @@ export class Game {
   private showMenu() {
     if (this.mode === 'title') return;
     this.input.unlockPointer();
-    const title = this.sandbox ? 'Sandbox' : PROJECT_MAP[this.projectId!]?.title ?? '';
+    const proj = this.projectId ? PROJECT_MAP[this.projectId] : null;
+    const title = this.sandbox ? 'Sandbox' : proj?.title ?? '';
     const rows = h('div', { class: 'row', style: 'flex-direction:column' });
-    rows.append(btn('▶ Resume', () => this.modal.hide(), 'go'));
-    if (!this.sandbox && this.projectId) rows.append(btn('⟲ Restart project', () => this.startProject(this.projectId!, false)));
-    rows.append(btn('📋 Projects', () => this.showProjects(() => this.showMenu())));
+    rows.append(btn('▶ Back to it', () => this.modal.hide(), 'go'));
+    if (proj) rows.append(btn('📜 The problem again', () => this.showBrief(proj, () => this.modal.hide())));
+    if (!this.sandbox && this.projectId) rows.append(btn('⟲ Restart this problem', () => this.startProject(this.projectId!, false)));
+    rows.append(btn('📋 Problems', () => this.showProjects(() => this.showMenu())));
     if (this.save.sandbox && !this.sandbox) rows.append(btn('🧪 Sandbox', () => this.startSandbox()));
     rows.append(btn('📓 Lab Notebook', () => this.showNotebook(() => this.showMenu())));
     rows.append(btn('⚙ Settings', () => this.showSettings(() => this.showMenu())));
@@ -346,10 +387,11 @@ export class Game {
     const keep = !fresh ? null : this.save.session?.mode === 'project' && this.save.session.project === id ? this.save.session : null;
     this.newSim(p, true);
     this.stash.clear();
-    this.bench = newBlueprint();
+    for (const [k, n] of Object.entries(p.kit)) this.stash.set(k, n);
+    for (const k of Object.keys(p.kit)) discover(this.save, k);
     if (keep) this.restoreSession(keep);
     this.persist();
-    this.beginIntro(p);
+    this.beginIntro(p, !keep);
   }
 
   private resume() {
@@ -365,29 +407,33 @@ export class Game {
     this.projectId = null;
     this.newSim(null, true);
     this.stash.clear();
-    this.bench = newBlueprint();
     const s = this.save.session;
     if (s?.mode === 'sandbox') this.restoreSession(s);
     // Something to play with.
     this.sim.spawnItem({ part: 'playground_ball', pos: [4, 0.2, 0] });
+    this.sim.spawnItem({ part: 'tennis_ball', pos: [3, 0.1, 1] });
     this.enterExplore();
-    this.thought.say('Sandbox! Everything I have found is on the lab shelf. No rules.', 4500);
+    this.thought.say('Sandbox. Everything I have ever used, as much as I want. No rules.', 4500);
     this.persist();
   }
 
   private restoreSession(s: NonNullable<SaveData['session']>) {
-    for (const [k, v] of Object.entries(s.stash)) this.stash.set(k, v);
-    if (s.bench) this.bench = s.bench;
-    for (const m of s.machines) this.sim.addMachine(m.bp, m.placement);
-    // Parts that are on the shelf / in machines are no longer lying in the yard.
     if (!this.sandbox) {
-      const used: string[] = [];
-      for (const [k, v] of this.stash) for (let i = 0; i < v; i++) used.push(k);
-      for (const p of this.bench.parts) used.push(p.def);
-      for (const m of s.machines) for (const p of m.bp.parts) used.push(p.def);
-      for (const d of used) {
-        const it = [...this.sim.items.values()].find((i) => i.def.id === d && !i.tag);
-        if (it) this.sim.removeItem(it.id);
+      this.stash.clear();
+      for (const [k, v] of Object.entries(s.stash)) this.stash.set(k, v);
+    }
+    for (const m of s.machines) this.sim.addMachine(m.bp, m.placement);
+    // Yard junk that was picked up and added to the kit is no longer lying around.
+    if (!this.sandbox && this.projectId) {
+      const kit = PROJECT_MAP[this.projectId].kit;
+      const have = new Map<string, number>();
+      for (const [k, v] of this.stash) have.set(k, (have.get(k) ?? 0) + v);
+      for (const m of s.machines) for (const p of m.bp.parts) have.set(p.def, (have.get(p.def) ?? 0) + 1);
+      for (const [d, n] of have) {
+        for (let i = 0; i < n - (kit[d] ?? 0); i++) {
+          const it = [...this.sim.items.values()].find((x) => x.def.id === d && !x.tag);
+          if (it) this.sim.removeItem(it.id);
+        }
       }
     }
   }
@@ -395,11 +441,12 @@ export class Game {
   private sessionData(): SaveData['session'] {
     if (this.mode === 'title' && !this.projectId && !this.sandbox) return this.save.session;
     const machines = [...this.sim.machines.values()].filter((m) => m.id !== this.testMachine).map((m) => ({ bp: m.bp, placement: m.placement }));
-    if (this.carrying) machines.push({ bp: this.carrying.bp, placement: { pos: [BENCH_ORIGIN.x + 2, 0, BENCH_ORIGIN.z], yaw: 0 } });
+    if (this.carrying) machines.push({ bp: this.carrying.bp, placement: { pos: [this.buildOrigin.x, 0, this.buildOrigin.z], yaw: this.buildYaw } });
+    if (this.mode === 'build' && this.build.bp.parts.length) machines.push({ bp: this.build.bp, placement: { pos: [this.buildOrigin.x, this.buildOrigin.y, this.buildOrigin.z], yaw: this.buildYaw } });
     return {
       mode: this.sandbox ? 'sandbox' : 'project',
       project: this.projectId,
-      bench: this.bench.parts.length ? this.bench : null,
+      bench: null,
       machines,
       stash: Object.fromEntries(this.stash),
     };
@@ -416,14 +463,14 @@ export class Game {
 
   // ================================================================== intro
 
-  private beginIntro(p: ProjectDef) {
+  private beginIntro(p: ProjectDef, cinematic: boolean) {
     this.mode = 'intro';
     this.sim.objectivesPaused = true;
-    this.introT = 0;
+    this.introT = cinematic ? 0 : 99;
     this.setHudVisible(false);
     this.input.unlockPointer();
     const f = new THREE.Vector3(...p.focus);
-    if (p.intro === 'ballOverFence') {
+    if (p.intro === 'ballOverFence' && cinematic) {
       const ball = this.sim.itemByTag('target')!;
       this.introBall = { from: new THREE.Vector3(10.2, 0.2, 4.4), to: toV(ball.rb.translation()) };
       ball.rb.setTranslation({ x: 10.2, y: 0.2, z: 4.4 }, true);
@@ -465,17 +512,24 @@ export class Game {
         this.introBall = null;
       }
     }
-    if (this.introT > (p.intro ? 2.6 : 1.6) && !this.modal.open) this.showBrief(p);
+    if (this.introT > (p.intro ? 2.6 : 1.6) && !this.modal.open) this.showBrief(p, () => this.afterBrief());
   }
 
-  private showBrief(p: ProjectDef) {
+  /** The briefing: the problem, where it is, and the kit. That is all a kid needs. */
+  private showBrief(p: ProjectDef, go: () => void) {
+    const idx = PROJECTS.indexOf(p) + 1;
+    const fresh = newKitParts(p).filter((id) => !this.save.discovered.includes(id) || !Object.values(this.save.completed).length);
     this.modal.show(
       [
-        h('div', { class: 'muted' }, `PROJECT · Stage ${p.stage}`),
+        h('div', { class: 'muted' }, `PROBLEM ${idx} of ${PROJECTS.length}`),
         h('h1', {}, p.title),
         h('p', {}, p.pitch[0]),
         h('p', {}, p.pitch[1]),
-        h('div', { class: 'row' }, btn("Let's go!", () => this.afterBrief(), 'go')),
+        h('p', { class: 'where' }, `📍 ${p.where}`),
+        h('div', { class: 'muted', style: 'margin-top:10px' }, 'YOUR KIT'),
+        this.kitRow(p.kit, fresh),
+        h('p', { class: 'muted', style: 'margin-top:6px' }, 'Anything else lying around the yard is fair game too.'),
+        h('div', { class: 'row' }, btn("Let's go!", go, 'go')),
       ],
       'brief',
     );
@@ -493,10 +547,15 @@ export class Game {
     this.sim.objectivesPaused = false;
     this.audio.unlock();
     this.enterExplore();
-    if (this.save.settings.hints && this.projectId === 'ball_over_fence' && !this.save.completed.ball_over_fence) {
-      setTimeout(() => this.thought.say('Hmm. The gate is locked. How do I get it back?', 4500), 900);
-      setTimeout(() => this.input.touchMode && this.stickHint.classList.remove('hidden'), 100);
-      setTimeout(() => this.stickHint.classList.add('hidden'), 9000);
+    const p = this.projectId ? PROJECT_MAP[this.projectId] : null;
+    if (this.save.settings.hints && p && !this.save.completed[p.id] && !this.sim.machines.size) {
+      const first = PROJECTS.indexOf(p) === 0;
+      setTimeout(() => this.thought.say(first ? 'Right. Walk over there and see what we are dealing with.' : p.hints[0], 4500), 900);
+      this.hintIndex = first ? 0 : 1;
+      if (first) {
+        setTimeout(() => this.input.touchMode && this.stickHint.classList.remove('hidden'), 100);
+        setTimeout(() => this.stickHint.classList.add('hidden'), 9000);
+      }
     }
   }
 
@@ -517,11 +576,9 @@ export class Game {
     const fp = this.mode === 'explore' || this.mode === 'carry';
     const rcActive = this.running && this.driving && this.anyReceiver();
     if (fp && !this.modal.open) {
-      if (this.cam.mode === 'eyes' || this.cam.mode === 'chase' || this.cam.mode === 'wide') {
-        if (this.cam.mode === 'eyes') {
-          this.yaw -= dx;
-          this.pitch = THREE.MathUtils.clamp(this.pitch - dy, -1.35, 1.35);
-        }
+      if (this.cam.mode === 'eyes') {
+        this.yaw -= dx;
+        this.pitch = THREE.MathUtils.clamp(this.pitch - dy, -1.35, 1.35);
       }
       if (this.cam.mode === 'free') {
         this.cam.orbit.yaw -= dx;
@@ -555,14 +612,37 @@ export class Game {
     return [...this.sim.machines.values()].filter((m) => m.state === 'frozen' && m.id !== this.testMachine);
   }
 
-  private nearBench(): boolean {
-    const p = toV(this.sim.player!.translation());
-    return Math.hypot(p.x - BENCH_ORIGIN.x, p.z - BENCH_ORIGIN.z) < 2.3;
-  }
-
   private nearGateFromOutside(): boolean {
     const p = toV(this.sim.player!.translation());
     return !this.sim.gateOpen && p.x > EAST_FENCE_X + 0.1 && p.x < EAST_FENCE_X + 2.2 && p.z > -5.2 && p.z < -2;
+  }
+
+  /** Where a mat would go: a patch of open, flat ground just in front of the kid. */
+  private updateSpot() {
+    const eye = this.sim.eye();
+    const flat = this.sim.look().setY(0);
+    if (flat.lengthSq() < 1e-4) flat.set(0, 0, -1);
+    flat.normalize();
+    const ahead = eye.clone().addScaledVector(flat, 1.9).setY(eye.y);
+    const down = this.sim.physics.raycast(ahead.clone().setY(eye.y + 0.5), new THREE.Vector3(0, -1, 0), 4, groups(0xffff, GROUP.STATIC));
+    let ok = !!down && down.normal.y > 0.95 && down.point.y < eye.y;
+    const origin = down ? down.point.clone() : ahead.setY(0);
+    if (ok) {
+      // Room for a mat: nothing solid in a low box over it (the ground itself sits just under).
+      const world = this.sim.physics.world;
+      const shape = new RAPIER.Cuboid(MAT_HALF, 0.35, MAT_HALF);
+      world.intersectionsWithShape({ x: origin.x, y: origin.y + 0.4, z: origin.z }, { x: 0, y: 0, z: 0, w: 1 }, shape, () => {
+        ok = false;
+        return false;
+      }, undefined, groups(0xffff, GROUP.STATIC));
+      // Not on top of another machine either.
+      for (const m of this.sim.machines.values()) {
+        const c = m.center();
+        if (Math.hypot(c.x - origin.x, c.z - origin.z) < MAT_HALF + 0.6) ok = false;
+      }
+      if (ok && !inZone(origin, 'home_yard')) ok = false;
+    }
+    this.spot = { origin, ok };
   }
 
   private exploreActions(): ActionDef[] {
@@ -572,23 +652,25 @@ export class Game {
     const sim = this.sim;
     const look = this.lookTarget();
     if (this.mode === 'carry' && this.carrying) {
-      a.push({ id: 'place', label: `📍 PLACE${k('E')}`, cls: this.carrying.valid ? 'primary' : '', onPress: () => this.placeCarried() });
+      a.push({ id: 'place', label: `📍 PUT DOWN${k('E')}`, cls: this.carrying.valid ? 'primary' : '', onPress: () => this.placeCarried() });
       a.push({ id: 'rot', label: `↻${k('R')}`, onPress: () => this.rotateCarried() });
-      if (this.nearBench() && !this.bench.parts.length) a.push({ id: 'tobench', label: '🔧 ON BENCH', onPress: () => this.carriedToBench() });
       if (touch) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
       return a;
     }
     if (sim.carried) {
+      const it = sim.carried.item;
+      if (it.def.buildable && !it.tag && !this.sandbox) a.push({ id: 'kit', label: `🧰 ADD TO KIT${k('E')}`, cls: 'primary', onPress: () => this.addCarriedToKit() });
       a.push({ id: 'throw', label: `🤾 THROW${k('F')}`, onPress: () => this.throwItem() });
-      a.push({ id: 'drop', label: `✋ DROP${k('Q')}`, cls: 'primary', onPress: () => this.dropItem() });
+      a.push({ id: 'drop', label: `✋ DROP${k('Q')}`, cls: it.def.buildable && !it.tag && !this.sandbox ? '' : 'primary', onPress: () => this.dropItem() });
     } else if (look?.kind === 'item') {
       a.push({ id: 'pick', label: `✊ PICK UP${k('E')}`, cls: 'primary', onPress: () => this.pickUp(look.item) });
-    } else if (look?.kind === 'machine' && look.machine.state === 'frozen' && look.machine.id !== this.testMachine) {
-      a.push({ id: 'pickm', label: `✊ PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
-    } else if (this.nearBench()) {
-      a.push({ id: 'build', label: `🔧 BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
+    } else if (look?.kind === 'machine' && look.machine.state === 'frozen' && look.machine.id !== this.testMachine && !this.running) {
+      a.push({ id: 'tinker', label: `🔧 TINKER${k('E')}`, cls: 'primary', onPress: () => this.tinker(look.machine) });
+      a.push({ id: 'pickm', label: `✊ PICK UP${k('F')}`, onPress: () => this.pickUpMachine(look.machine) });
     } else if (this.nearGateFromOutside()) {
       a.push({ id: 'gate', label: `🔓 OPEN GATE${k('E')}`, cls: 'primary', onPress: () => this.openGate() });
+    } else if (!this.running && this.spot.ok) {
+      a.push({ id: 'build', label: `🔧 BUILD HERE${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
     }
     if (touch && !(this.running && this.driving && this.anyReceiver())) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
     return a;
@@ -648,15 +730,35 @@ export class Game {
     if (!r.ok) {
       this.toasts.show(r.reason ?? "Can't", 'bad');
       this.audio.play('error');
+      return;
     }
+    if (it.def.buildable && !it.tag && !this.sandbox && this.save.settings.hints) this.thought.say('Hmm. I could use this.', 2200);
   }
 
   private dropItem() {
     this.sim.drop(0);
   }
 
+  private dropCarried() {
+    if (this.sim?.carried) this.sim.drop(0);
+  }
+
   private throwItem() {
     this.sim.drop(8.5);
+  }
+
+  /** "Wait... I could use THAT." Junk from the yard joins the kit. */
+  private addCarriedToKit() {
+    const c = this.sim.carried;
+    if (!c || !c.item.def.buildable || c.item.tag) return;
+    const it = c.item;
+    this.sim.drop(0);
+    this.stash.set(it.def.id, (this.stash.get(it.def.id) ?? 0) + 1);
+    const first = discover(this.save, it.def.id);
+    this.sim.removeItem(it.id);
+    this.audio.play('discover');
+    this.toasts.show(`🧰 ${it.def.name} added to the kit${first ? ' — new!' : ''}`, 'new', 2600);
+    this.persistSoon();
   }
 
   private tapJump() {
@@ -673,26 +775,12 @@ export class Game {
 
   // ================================================================== building
 
-  private absorbLab() {
-    if (this.sandbox) return;
-    for (const it of this.sim.itemsInZone('lab')) {
-      this.stash.set(it.def.id, (this.stash.get(it.def.id) ?? 0) + 1);
-      if (discover(this.save, it.def.id)) this.persistSoon();
-      this.sim.removeItem(it.id);
-    }
-  }
-
-  enterBuild() {
-    if (this.sim.carried) {
-      const it = this.sim.carried.item;
-      this.sim.drop(0);
-      if (it.def.buildable && !it.tag && !this.sandbox) {
-        this.stash.set(it.def.id, (this.stash.get(it.def.id) ?? 0) + 1);
-        discover(this.save, it.def.id);
-        this.sim.removeItem(it.id);
-      }
-    }
-    this.absorbLab();
+  /** Unroll the mat right here, facing the way the kid is looking, and start building from the kit. */
+  enterBuild(bp: Blueprint = newBlueprint(), origin: THREE.Vector3 = this.spot.origin, yaw: number = this.facingYaw()) {
+    if (this.running) return;
+    this.dropCarried();
+    this.buildOrigin.copy(origin);
+    this.buildYaw = yaw;
     this.mode = 'build';
     this.input.unlockPointer();
     this.input.enabled = false;
@@ -700,44 +788,87 @@ export class Game {
     this.setHudVisible(false);
     this.thought.hide();
     document.body.classList.add('building');
-    this.build.enter(this.bench);
-    // First time in the lab on a project with an idea: offer it.
-    if (!this.sandbox && this.projectId && !this.save.completed[this.projectId] && !this.bench.parts.length && !this.ideaOffered.has(this.projectId) && ideasFor(this.projectId).length) {
-      this.ideaOffered.add(this.projectId);
+    this.build.enter(bp);
+    // Been failing a while on a project with an idea? Offer it once.
+    if (!this.sandbox && this.projectId && !this.save.completed[this.projectId] && !bp.parts.length && !this.ideaOffered && this.failedRuns >= 2 && ideaFor(this.projectId)) {
+      this.ideaOffered = true;
       setTimeout(() => this.mode === 'build' && this.build.showIdea(true), 500);
     }
   }
 
-  private exitBuild(bp: Blueprint) {
-    this.bench = bp;
-    document.body.classList.remove('building');
-    this.build.exit();
-    this.input.enabled = true;
-    this.enterExplore();
-    this.persist();
+  /** Machine "forward" (+z) pointing where the kid looks, snapped to 45 degrees. */
+  private facingYaw(): number {
+    const step = Math.PI / 4;
+    return Math.round((this.yaw + Math.PI) / step) * step;
   }
 
-  private benchDone(bp: Blueprint) {
-    document.body.classList.remove('building');
+  /** Re-open a frozen machine on its own spot. */
+  private tinker(m: MachineInstance) {
+    if (this.running) {
+      this.toasts.show('Reset first!', 'bad');
+      return;
+    }
+    const origin = new THREE.Vector3(m.placement.pos[0], m.placement.pos[1], m.placement.pos[2]);
+    const yaw = m.placement.yaw;
+    const bp = clone(m.bp);
+    this.sim.removeMachine(m.id);
+    this.audio.play('pickup');
+    this.enterBuild(bp, origin, yaw);
+  }
+
+  private leaveBuild() {
+    if (this.mode !== 'build') return;
+    if (this.build.testing) this.build.stopTest();
     this.build.exit();
+    document.body.classList.remove('building');
     this.input.enabled = true;
-    this.bench = newBlueprint();
-    this.startCarry(bp);
-    this.thought.say(`Got it. Now where does the ${bp.name} go?`, 3500);
+  }
+
+  /** DONE: whatever is on the mat stays there, frozen, ready for GO. */
+  private leaveMat(bp: Blueprint) {
+    this.leaveBuild();
+    if (bp.parts.length) {
+      this.sim.addMachine(clone(bp), { pos: [this.buildOrigin.x, this.buildOrigin.y, this.buildOrigin.z], yaw: this.buildYaw });
+      this.audio.play('attach', this.buildOrigin);
+    }
+    this.enterExplore();
+    if (bp.parts.length && this.save.settings.hints && Object.keys(this.save.completed).length === 0) {
+      this.thought.say(bp.parts.some((p) => getPart(p.def).behaviors.some((b) => b.type === 'receiver')) ? 'Hit GO, then drive with the stick.' : 'Hit GO and see what happens. Or pick it up and put it somewhere better.', 4000);
+    }
     this.persist();
   }
 
   private startTest(bp: Blueprint) {
-    const m = this.sim.addMachine(clone(bp), { pos: [BENCH_ORIGIN.x, BENCH_ORIGIN.y + 0.002, BENCH_ORIGIN.z], yaw: 0 });
+    if (bp.parts.some((p) => getPart(p.def).behaviors.some((b) => b.type === 'receiver'))) {
+      // Driving needs the sticks: leave the mat and go for real.
+      this.leaveMat(bp);
+      this.go();
+      return;
+    }
+    const m = this.sim.addMachine(clone(bp), { pos: [this.buildOrigin.x, this.buildOrigin.y, this.buildOrigin.z], yaw: this.buildYaw });
     this.testMachine = m.id;
-    m.go();
-    this.audio.play('go');
+    this.sim.goAll();
+    this.running = true;
+    this.verdictShown = false;
     this.journal.begin(this.sim);
+    this.replay.start();
+    this.audio.play('go');
+    const o = this.cam.orbit;
+    o.center.copy(this.buildOrigin).add(new THREE.Vector3(0, 0.3, 0));
+    o.dist = Math.max(o.dist, 3.2);
+    this.cam.set('free', false, 0.8);
   }
 
   private stopTest() {
-    if (this.testMachine !== null) this.sim.removeMachine(this.testMachine);
+    if (this.testMachine !== null) {
+      this.resetRun(true);
+      this.sim.removeMachine(this.testMachine);
+    }
     this.testMachine = null;
+    const o = this.cam.orbit;
+    o.center.copy(this.buildOrigin).add(new THREE.Vector3(0, 0.15, 0));
+    o.dist = Math.min(o.dist, 2.6);
+    this.cam.set('bench', false, 0.7);
   }
 
   // ================================================================== carrying machines
@@ -814,7 +945,6 @@ export class Game {
         if (hitStatic) return false;
       }
     }
-    void obbBounds;
     return true;
   }
 
@@ -832,17 +962,7 @@ export class Game {
     this.fx.emit('dust', new THREE.Vector3(c.placement.pos[0], 0.05, c.placement.pos[2]), 14);
     this.carrying = null;
     this.mode = 'explore';
-    if (this.save.settings.hints && !this.save.completed.ball_over_fence) this.thought.say('Ready. Hit GO and see what happens.', 3000);
     this.persist();
-  }
-
-  private carriedToBench() {
-    const c = this.carrying;
-    if (!c) return;
-    c.view.group.removeFromParent();
-    this.bench = c.bp;
-    this.carrying = null;
-    this.enterBuild();
   }
 
   private pickUpMachine(m: MachineInstance) {
@@ -885,17 +1005,26 @@ export class Game {
     this.persistSoon();
   }
 
-  resetRun() {
+  resetRun(quiet = false) {
     if (!this.running) return;
     const verdict = !this.succeeded && this.journal.worthMentioning() && !this.verdictShown ? this.journal.verdict() : null;
     for (const m of [...this.sim.machines.values()]) if (m.id !== this.testMachine) this.sim.resetMachine(m.id);
     this.running = false;
     this.replay.stop();
-    this.cam.set('eyes', false, 0.8);
-    if (verdict) {
+    if (!this.succeeded) this.failedRuns++;
+    if (this.mode !== 'build') this.cam.set('eyes', false, 0.8);
+    if (verdict && !quiet) {
       this.thought.say(verdict, 4500);
       this.audio.play('fail');
-    }
+    } else if (!this.succeeded) this.nudge();
+  }
+
+  /** After a failed run, one kid-thought that points at what to try next. */
+  private nudge() {
+    if (!this.save.settings.hints || !this.projectId || this.succeeded) return;
+    const p = PROJECT_MAP[this.projectId];
+    const line = p.nudges[Math.min(this.failedRuns - 1, p.nudges.length - 1)];
+    if (line) setTimeout(() => !this.running && !this.succeeded && this.thought.say(line, 4500), 4800);
   }
 
   private cycleCamera() {
@@ -927,7 +1056,6 @@ export class Game {
   private subject(): THREE.Vector3 | null {
     let best: { v: THREE.Vector3; s: number } | null = null;
     for (const m of this.sim.machines.values()) {
-      if (m.id === this.testMachine && this.mode !== 'build') continue;
       if (m.state !== 'running' && this.running) continue;
       let speed = 0;
       for (const b of m.bodies) speed = Math.max(speed, toV(b.rb.linvel()).length());
@@ -970,7 +1098,7 @@ export class Game {
   private handleEvents() {
     const evs = this.sim.drainEvents();
     for (const e of evs) {
-      if (this.running || this.testMachine !== null) this.journal.event(e);
+      if (this.running) this.journal.event(e);
       this.eventFx(e);
     }
     for (const oe of this.sim.objectiveEvents.splice(0)) {
@@ -1047,16 +1175,9 @@ export class Game {
         A.play('land', e.pos, Math.min(1, e.speed / 6));
         if (e.speed > 4) this.fx.emit('dust', e.pos, 8);
         break;
-      case 'pickup': {
+      case 'pickup':
         A.play('pickup', e.pos);
-        if (discover(this.save, e.part)) {
-          const d = getPart(e.part);
-          this.toasts.show(`✨ Found: <b>${d.name}</b> — ${d.traits.join(', ')}`, 'new', 3200);
-          A.play('discover');
-          this.persistSoon();
-        }
         break;
-      }
       case 'drop':
         A.play('drop', e.pos);
         break;
@@ -1082,12 +1203,13 @@ export class Game {
       const nextId = PROJECTS.find((x) => this.save.unlocked.includes(x.id) && !this.save.completed[x.id])?.id;
       const content: Node[] = [
         h('div', { class: 'muted' }, `${p.title} · solved in ${fmtTime(time)}`),
-        h('h1', {}, 'GOT IT!'),
+        h('h1', {}, 'IT WORKED!'),
         ...bonuses.map((b) => h('div', { class: `bonus ${b.earned ? 'got' : 'miss'}` }, h('i', {}, b.earned ? '★' : ''), b.def.label)),
+        h('div', { class: 'lesson' }, h('b', {}, '📓 Lab Notebook'), h('div', {}, p.lesson)),
       ];
-      if (unlocked.sandbox) content.push(h('p', {}, '🧪 Sandbox unlocked! Build anything with everything you have found.'));
-      if (unlocked.projects.length) content.push(h('p', {}, `New: ${unlocked.projects.map((id) => PROJECT_MAP[id].title).join(', ')}`));
-      content.push(h('p', { class: 'muted' }, 'Wait. What ELSE can I build?'));
+      if (unlocked.sandbox) content.push(h('p', {}, '🧪 Sandbox unlocked: everything you have used, no limits.'));
+      if (nextId) content.push(h('p', { class: 'muted' }, `Next problem: ${PROJECT_MAP[nextId].title}. New junk in the kit.`));
+      else content.push(h('p', { class: 'muted' }, 'That was the last problem. For now. What ELSE could I build?'));
       const row = h('div', { class: 'row' });
       if (nextId) row.append(btn(`▶ ${PROJECT_MAP[nextId].title}`, () => this.startProject(nextId), 'go'));
       row.append(btn('🧪 Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
@@ -1120,9 +1242,14 @@ export class Game {
       case 'q':
         if (this.sim.carried) this.dropItem();
         break;
-      case 'f':
+      case 'f': {
         if (this.sim.carried) this.throwItem();
+        else {
+          const look = this.lookTarget();
+          if (look?.kind === 'machine' && look.machine.state === 'frozen' && !this.running) this.pickUpMachine(look.machine);
+        }
         break;
+      }
       case 'g':
         if (!this.running && this.mode === 'explore') this.go();
         break;
@@ -1170,6 +1297,7 @@ export class Game {
     }
     if (this.mode === 'intro') this.updateIntro(dt);
     if (this.mode === 'carry') this.updateCarry();
+    if (this.mode === 'explore') this.updateSpot();
     if (this.mode === 'build') this.build.update(dt);
     if (this.mode === 'title') this.cam.orbit.yaw = 0.35 + Math.sin(this.time * 0.06) * 0.35;
     this.updateGate(dt);
@@ -1200,11 +1328,11 @@ export class Game {
     }
     if (steps === 6) this.acc = 0;
     this.handleEvents();
-    if (this.running || this.testMachine !== null) {
+    if (this.running) {
       this.journal.sample(this.sim, dt, this.lastThrottle);
-      if (this.running && this.journal.settled && !this.verdictShown && !this.succeeded && Math.abs(this.lastThrottle) < 0.1) {
+      if (this.journal.settled && !this.verdictShown && !this.succeeded && Math.abs(this.lastThrottle) < 0.1) {
         this.verdictShown = true;
-        this.thought.say(this.journal.verdict() + '  (Tap RESET to try again.)', 5000);
+        this.thought.say(this.journal.verdict() + (this.mode === 'build' ? '  (STOP & FIX to try again.)' : '  (RESET to try again.)'), 5500);
         this.audio.play('fail');
       }
     }
@@ -1231,9 +1359,6 @@ export class Game {
   private updateCamera(dt: number) {
     const subj = this.subject();
     const eye = this.sim.eye();
-    if (this.mode === 'explore' || this.mode === 'carry') {
-      // no-op: first person uses yaw/pitch
-    }
     let heading: THREE.Vector3 | null = null;
     let vel = new THREE.Vector3();
     for (const m of this.sim.machines.values()) {
@@ -1343,18 +1468,15 @@ export class Game {
     this.leftActions.set(explore ? this.runActions() : []);
     this.reticle.classList.toggle('hidden', this.cam.mode !== 'eyes');
     this.prompt.classList.toggle('hidden', this.cam.mode !== 'eyes');
-    if (this.save.settings.hints && this.mode === 'explore' && !this.running) {
+    // Idle thoughts: nudge a kid who is standing around with nothing built.
+    if (this.save.settings.hints && this.mode === 'explore' && !this.running && proj && !this.succeeded) {
       this.hintTimer += 1 / 60;
-      if (this.hintTimer > 50 && !this.sim.machines.size && this.projectId === 'ball_over_fence' && !this.succeeded) {
+      if (this.hintTimer > 40 && !this.sim.machines.size && !this.sim.carried) {
         this.hintTimer = 0;
-        const lines = [
-          'All the good junk ends up in the garage lab...',
-          'That gap under the fence is small. But something small could fit.',
-          'I bet I could build something that goes and gets it.',
-        ];
-        this.thought.say(lines[Math.floor(this.time) % lines.length], 4500);
+        const line = proj.hints[this.hintIndex % proj.hints.length];
+        this.hintIndex++;
+        if (line) this.thought.say(line, 4500);
       }
     }
-    void inZone;
   }
 }

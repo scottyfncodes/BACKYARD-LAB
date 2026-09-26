@@ -169,6 +169,7 @@ export class Simulation implements MachineHost {
   startProject(p: ProjectDef) {
     this.objective = new ObjectiveTracker(p);
     this.projectTime = 0;
+    if (this.opts.junk !== false) for (const s of p.yard) this.spawnItem(s);
     for (const s of p.props) {
       const it = this.spawnItem(s);
       const snag = p.snags?.find((x) => x.tag === s.tag);
@@ -560,11 +561,6 @@ export class Simulation implements MachineHost {
 
   inZone(p: Vector3, zone: string) {
     return inZone(p, zone);
-  }
-
-  /** Items resting inside the lab zone (for the workbench tray). */
-  itemsInZone(zone: string): Item[] {
-    return [...this.items.values()].filter((it) => !it.tag && it.def.buildable && inZone(toV(it.rb.translation()), zone) && this.carried?.item !== it);
   }
 
   worldPose(rb: RigidBody): Pose {

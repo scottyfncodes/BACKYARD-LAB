@@ -425,6 +425,20 @@ const BUILDERS: Record<string, Builder> = {
     }
     return g;
   },
+  newspaper: () => {
+    const paper = mat('newspaper', () => new THREE.MeshStandardMaterial({ color: 0xe9e4d6, roughness: 0.95 }));
+    const g = group(cyl(0.035, 0.3, paper, 'x', 12));
+    g.add(cyl(0.037, 0.02, M.plastic(0xd8433a), 'x', 10));
+    g.add(box(0.3, 0.004, 0.02, M.plastic(0x444444), 0, 0.03, 0.01));
+    return g;
+  },
+  lunchbox: () => {
+    const g = group(box(0.16, 0.1, 0.12, M.plastic(0x2a8fe0)));
+    g.add(box(0.17, 0.02, 0.13, M.plastic(0xf2c230), 0, 0.045, 0));
+    g.add(box(0.06, 0.02, 0.02, M.plastic(0xf2c230), 0, 0.065, 0));
+    g.add(box(0.05, 0.05, 0.001, M.plastic(0xd8433a), 0, -0.01, 0.061));
+    return g;
+  },
   tennis_ball: () => group(new THREE.Mesh(new THREE.SphereGeometry(0.034, 16, 12), mat('tennis', () => new THREE.MeshStandardMaterial({ map: tennisTexture(), roughness: 0.9 })))),
 };
 

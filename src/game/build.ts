@@ -26,7 +26,7 @@ import { BlueprintView } from '../render/views';
 import { btn, h, type Thought, type Toasts } from '../ui/dom';
 import type { CameraDirector } from './camera';
 import { generateStuds, rankInDirection, type Stud } from './studs';
-import { WHERE, type Idea } from '../data/ideas';
+import type { Idea } from '../data/ideas';
 import { transformPoint } from '../sim/geom';
 
 export interface Stash {
@@ -45,18 +45,22 @@ export interface BuildHost {
   toasts: Toasts;
   thought: Thought;
   stash: Stash;
+  /** Where the mat is: machine space origin, in the world. Set before enter(). */
   benchOrigin: THREE.Vector3;
+  /** Which way the mat faces: machine +z, turned by this yaw, is "forward". */
+  benchYaw: number;
   sandbox: boolean;
   hints: boolean;
+  /** Leave the mat. Whatever is on it stays there as a frozen machine. */
   onDone(bp: Blueprint): void;
-  onExit(bp: Blueprint): void;
+  /** Run it right here, right now. */
   onTest(bp: Blueprint): void;
   onStopTest(): void;
   onChange(bp: Blueprint): void;
   creations(): { name: string; bp: Blueprint }[];
   saveCreation(bp: Blueprint): void;
-  ideas(): Idea[];
-  /** Parts on the bench plus parts on the shelf, for the idea checklist. */
+  idea(): Idea | null;
+  /** Parts on the mat plus parts still in the kit, for the idea checklist. */
   onBench(def: string): number;
 }
 
@@ -102,7 +106,8 @@ function holdBtn(label: string, fire: () => void, cls = '', every = 60): HTMLBut
   return b;
 }
 
-const BENCH = { x: 0.72, z: 0.38 };
+/** The mat: a square of ground the kid builds on. Machine space is centred on it. */
+const BENCH = { x: 0.8, z: 0.8, step: 0.16 };
 
 export function nameMachine(bp: Blueprint): string {
   const has = (id: string) => bp.parts.some((p) => p.def === id);
@@ -164,9 +169,22 @@ export class BuildMode {
   guide: { idea: Idea; step: number; uids: number[] } | null = null;
   private guideEl!: HTMLElement;
   private guideFinished = false;
+  private warnedGo = false;
   private raycaster = new THREE.Raycaster();
   private listeners: [EventTarget, string, EventListener][] = [];
   private time = 0;
+  private mat: THREE.Mesh | null = null;
+  /** Machine space -> world: rotate by the mat's yaw, then move to its origin. */
+  private R = new THREE.Quaternion();
+  private Rinv = new THREE.Quaternion();
+
+  private toWorld(p: THREE.Vector3): THREE.Vector3 {
+    return p.clone().applyQuaternion(this.R).add(this.host.benchOrigin);
+  }
+
+  private toMachine(p: THREE.Vector3): THREE.Vector3 {
+    return p.clone().sub(this.host.benchOrigin).applyQuaternion(this.Rinv);
+  }
 
   constructor(private host: BuildHost) {}
 
@@ -176,17 +194,27 @@ export class BuildMode {
     this.active = true;
     this.bp = bp;
     this.view = new BlueprintView(bp);
-    this.view.group.position.copy(this.host.benchOrigin);
-    this.proxies.position.copy(this.host.benchOrigin);
-    this.markers.position.copy(this.host.benchOrigin);
+    this.R.setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.host.benchYaw);
+    this.Rinv.copy(this.R).invert();
+    for (const g of [this.view.group, this.proxies, this.markers]) {
+      g.position.copy(this.host.benchOrigin);
+      g.quaternion.copy(this.R);
+    }
     const scene = this.host.r.scene;
     scene.add(this.view.group, this.proxies, this.markers);
+    // The mat: a square of old cardboard on the grass.
+    this.mat = new THREE.Mesh(new THREE.PlaneGeometry(BENCH.x * 2 + 0.2, BENCH.z * 2 + 0.2), M.basic(0xd9b98a, 0.45));
+    this.mat.quaternion.copy(this.R).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2));
+    this.mat.position.copy(this.host.benchOrigin).add(new THREE.Vector3(0, 0.006, 0));
+    this.mat.renderOrder = 1;
+    scene.add(this.mat);
     this.rebuildProxies();
     const o = this.host.cam.orbit;
-    o.center.copy(this.host.benchOrigin).add(new THREE.Vector3(0, 0.12, 0));
-    o.yaw = Math.PI / 2 + 0.35;
-    o.pitch = 0.6;
-    o.dist = 1.7;
+    o.center.copy(this.host.benchOrigin).add(new THREE.Vector3(0, 0.15, 0));
+    const cam = this.host.r.camera.position;
+    o.yaw = Math.atan2(cam.x - this.host.benchOrigin.x, cam.z - this.host.benchOrigin.z);
+    o.pitch = 0.62;
+    o.dist = 2.4;
     this.host.cam.set('bench');
     this.buildUI();
     const canvas = this.host.r.canvas;
@@ -202,7 +230,7 @@ export class BuildMode {
     this.on(window, 'keydown', (e) => this.key((e as KeyboardEvent).key.toLowerCase()));
     this.on(canvas, 'contextmenu', (e) => e.preventDefault());
     if (this.host.hints && bp.parts.length === 0) {
-      setTimeout(() => this.active && this.bp.parts.length === 0 && this.host.thought.say('My lab! Drag something from the shelf onto the bench.', 5000), 700);
+      setTimeout(() => this.active && this.bp.parts.length === 0 && this.host.thought.say('Okay. Tap something in the kit and put it on the mat.', 5000), 700);
     }
     this.refresh();
   }
@@ -216,6 +244,8 @@ export class BuildMode {
     this.view.group.removeFromParent();
     this.proxies.removeFromParent();
     this.markers.removeFromParent();
+    this.mat?.removeFromParent();
+    this.mat = null;
     this.root?.remove();
   }
 
@@ -261,7 +291,7 @@ export class BuildMode {
       this.renderMarkers();
       return;
     }
-    this.stats.innerHTML = n ? `${this.escape(nameMachine(bp))}<small>${n} part${n === 1 ? '' : 's'} · ${mass.toFixed(1)} kg</small>` : `The Bench<small>empty</small>`;
+    this.stats.innerHTML = n ? `${this.escape(nameMachine(bp))}<small>${n} part${n === 1 ? '' : 's'} · ${mass.toFixed(1)} kg</small>` : `The Mat<small>nothing on it yet</small>`;
     this.renderTop();
     this.renderTray();
     this.renderTools();
@@ -277,16 +307,15 @@ export class BuildMode {
   private renderTop() {
     const b: HTMLElement[] = [];
     if (this.testing) {
-      b.push(btn('■ STOP TEST', () => this.stopTest(), 'danger'));
+      b.push(btn('⟲ STOP & FIX', () => this.stopTest(), 'danger'));
     } else {
       if (this.host.sandbox) {
         b.push(btn('💾', () => this.saveCreation(), 'small'));
         b.push(btn('📂', () => this.loadMenu(), 'small'));
       }
-      if (this.host.ideas().length && !this.guide) b.push(btn('💡 Idea', () => this.showIdea(), 'small'));
-      if (this.bp.parts.length) b.push(btn('▶ TEST', () => this.test(), 'blue'));
-      if (this.bp.parts.length) b.push(btn('✔ DONE', () => this.done(), 'primary'));
-      b.push(btn('✕', () => this.leave(), 'small'));
+      if (this.host.idea() && !this.guide) b.push(btn('💡 Idea', () => this.showIdea(), 'small'));
+      if (this.bp.parts.length) b.push(btn('▶ GO', () => this.test(), 'go'));
+      b.push(btn(this.bp.parts.length ? '✔ DONE' : '← BACK', () => this.done(), this.bp.parts.length ? 'primary' : 'small'));
     }
     this.topBtns.replaceChildren(...b);
   }
@@ -299,7 +328,7 @@ export class BuildMode {
     this.tray.classList.remove('hidden');
     const list = this.host.stash.list();
     if (!list.length) {
-      this.tray.replaceChildren(h('div', { class: 'empty-msg' }, 'The shelf is empty. Go find some junk and bring it here!'));
+      this.tray.replaceChildren(h('div', { class: 'empty-msg' }, 'Nothing left in the kit. Anything useful lying around the yard?'));
       return;
     }
     const order = new Map(PARTS.map((p, i) => [p.id, i]));
@@ -476,14 +505,14 @@ export class BuildMode {
       const hits = rc.intersectObjects(this.proxies.children, false);
       const hit = hits[0];
       if (hit && hit.face) {
-        const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
-        return { uid: hit.object.userData.uid, point: hit.point.clone().sub(this.host.benchOrigin), normal: n, link: !!hit.object.userData.link };
+        const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).applyQuaternion(this.Rinv).normalize();
+        return { uid: hit.object.userData.uid, point: this.toMachine(hit.point), normal: n, link: !!hit.object.userData.link };
       }
     }
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.host.benchOrigin.y);
     const p = new THREE.Vector3();
     if (!rc.ray.intersectPlane(plane, p)) return null;
-    const m = p.sub(this.host.benchOrigin);
+    const m = this.toMachine(p);
     if (Math.abs(m.x) > BENCH.x + 0.3 || Math.abs(m.z) > BENCH.z + 0.3) return null;
     m.x = THREE.MathUtils.clamp(m.x, -BENCH.x, BENCH.x);
     m.z = THREE.MathUtils.clamp(m.z, -BENCH.z, BENCH.z);
@@ -529,7 +558,7 @@ export class BuildMode {
     const start = at ?? this.defaultCursor(moving);
     if (!this.snapNear(start.x, start.y, Infinity)) this.firstValidStud();
     if (d.link) this.setStatus(`Tap where one end of the ${d.name.toLowerCase()} goes`);
-    else if (this.host.hints) this.setStatus('Drag the ghost where you want it and let go, or tap a spot then tap the ghost.', 'good');
+    else if (this.host.hints) this.setStatus('Drag it where you want it and let go, or tap a spot then tap the ghost.', 'good');
   }
 
   private tintGhost(color: number) {
@@ -556,7 +585,7 @@ export class BuildMode {
   }
 
   private toScreen(machinePoint: THREE.Vector3): { x: number; y: number } {
-    const p = machinePoint.clone().add(this.host.benchOrigin).project(this.host.r.camera);
+    const p = this.toWorld(machinePoint).project(this.host.r.camera);
     const rect = this.host.r.canvas.getBoundingClientRect();
     return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
   }
@@ -579,6 +608,7 @@ export class BuildMode {
       m.setMatrixAt(i, mtx);
     });
     m.position.copy(this.host.benchOrigin);
+    m.quaternion.copy(this.R);
     m.renderOrder = 2;
     this.studMesh = m;
     this.host.r.scene.add(m);
@@ -662,7 +692,7 @@ export class BuildMode {
     // Nothing is allowed to sink through the bench top.
     if (pl && pl.valid && !getPart(h.def).link) {
       const low = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: h.def, p: [pl.pose.p.x, pl.pose.p.y, pl.pose.p.z], q: [pl.pose.q.x, pl.pose.q.y, pl.pose.q.z, pl.pose.q.w] }], links: [] }).min.y;
-      if (low < -0.01) pl = { ...pl, valid: false, reason: 'That would go through the bench' };
+      if (low < -0.01) pl = { ...pl, valid: false, reason: 'That would go into the ground' };
     }
     this.placeCache.set(i, pl);
     return pl;
@@ -678,7 +708,7 @@ export class BuildMode {
 
   /** Studs on the side of things facing the camera, with their screen spots. */
   private visibleStuds(): { i: number; x: number; y: number }[] {
-    const cam = this.host.r.camera.position.clone().sub(this.host.benchOrigin);
+    const cam = this.toMachine(this.host.r.camera.position);
     const out: { i: number; x: number; y: number }[] = [];
     this.studs.forEach((st, i) => {
       if (st.normal.dot(cam.clone().sub(st.point)) <= 0) return;
@@ -915,7 +945,7 @@ export class BuildMode {
         tether: pl.conn.tether,
       });
     }
-    // Ropes that can no longer reach come off and go back on the shelf.
+    // Ropes that can no longer reach come off and go back in the kit.
     for (const l of mv.links) {
       this.bp.links.push(l);
       const def = getPart(findPart(this.bp, l.part)!.def);
@@ -938,11 +968,11 @@ export class BuildMode {
     const pl = this.placementFor(this.aim);
     if (!pl || !this.ghost) return;
     this.ghost.visible = true;
-    this.ghost.position.copy(pl.pose.p).add(this.host.benchOrigin);
+    this.ghost.position.copy(this.toWorld(pl.pose.p));
     this.ghost.userData.base = this.ghost.position.clone();
-    this.ghost.quaternion.copy(pl.pose.q);
+    this.ghost.quaternion.copy(this.R).multiply(pl.pose.q);
     // Hover just off the spot it will land on.
-    this.hoverLift.copy(pl.conn && pl.conn.kind !== 'tether' ? pl.pose.p.clone().sub(pl.conn.anchor).normalize() : new THREE.Vector3(0, 1, 0));
+    this.hoverLift.copy(pl.conn && pl.conn.kind !== 'tether' ? pl.pose.p.clone().sub(pl.conn.anchor).normalize() : new THREE.Vector3(0, 1, 0)).applyQuaternion(this.R);
     const color = pl.valid ? (pl.conn && pl.conn.kind !== 'weld' ? 0x40c0ff : 0x40ff80) : 0xff4030;
     this.tintGhost(color);
     if (!pl.valid) this.setStatus(pl.reason ?? 'Nope', 'bad');
@@ -952,7 +982,7 @@ export class BuildMode {
       const tilt = this.holding.tilt;
       const note = tilt && pl.conn.kind !== 'weld' ? ' (stays square on it)' : tilt ? ` · tilted ${tilt}°` : '';
       this.setStatus(`${how} the ${target}${note}`, 'good');
-    } else this.setStatus(`Put it on the bench${this.holding.tilt ? ` · tilted ${this.holding.tilt}°` : ''}`, 'good');
+    } else this.setStatus(`Put it on the mat${this.holding.tilt ? ` · tilted ${this.holding.tilt}°` : ''}`, 'good');
   }
 
   private previewLink(def: PartDef) {
@@ -973,8 +1003,8 @@ export class BuildMode {
       this.host.r.scene.add(this.linkLine);
     }
     this.linkLine.material = M.basic(ok ? 0x40ff80 : 0xff4030, 0.8);
-    this.linkLine.position.copy(a).add(b).multiplyScalar(0.5).add(this.host.benchOrigin);
-    this.linkLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+    this.linkLine.position.copy(this.toWorld(a.clone().add(b).multiplyScalar(0.5)));
+    this.linkLine.quaternion.copy(this.R).multiply(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize()));
     this.linkLine.scale.set(1, Math.max(0.01, len), 1);
     this.setStatus(ok ? `${len.toFixed(2)} m — ✔ to tie it` : len > def.link!.maxSpan ? 'Too far apart' : 'Pick something else', ok ? 'good' : 'bad');
   }
@@ -1008,6 +1038,7 @@ export class BuildMode {
       }
       this.host.stash.take(def.id);
       this.host.audio.play('tie');
+      this.guideAdvanceTie(def.id, res.uid!);
       this.afterChange();
       this.linkStart = null;
       this.linkLine?.removeFromParent();
@@ -1068,7 +1099,7 @@ export class BuildMode {
     this.host.onChange(this.bp);
     if (this.host.hints && !this.guide) {
       const n = this.bp.parts.length;
-      if (n === 1) this.host.thought.say('Now stick more stuff onto it. Wheels spin on axles. Motors spin whatever is on their shaft.', 5500);
+      if (n === 1) this.host.thought.say('Now stick more stuff onto it. Things click together where the dots are.', 5000);
       if (n === 3 && this.bp.parts.some((p) => getPart(p.def).behaviors.some((b) => b.type === 'motor')) && !this.bp.parts.some((p) => p.def.startsWith('battery')))
         this.host.thought.say("Motors won't do anything without a battery stuck to the same machine.", 5000);
     }
@@ -1282,7 +1313,7 @@ export class BuildMode {
     if (this.pointers.size < 2) this.pinch = null;
     if (!p) return;
     const moved = Math.hypot(e.clientX - p.sx, e.clientY - p.sy);
-    const tap = moved < 10 && performance.now() - p.t < 450;
+    const tap = moved < 10 && performance.now() - p.t < 700;
     if (this.dragFromTray) {
       this.dragFromTray = false;
       // Dropped back on the tray: never mind. Anywhere else: it clicks on.
@@ -1347,6 +1378,11 @@ export class BuildMode {
     if (!this.bp.parts.length) return;
     this.clearHolding(false);
     this.select(null);
+    if (this.warnBeforeGo() && !this.warnedGo) {
+      this.warnedGo = true;
+      return;
+    }
+    this.warnedGo = false;
     this.testing = true;
     this.view.group.visible = false;
     this.host.onTest(this.bp);
@@ -1362,6 +1398,8 @@ export class BuildMode {
   }
 
   private done() {
+    if (this.testing) this.stopTest();
+    this.clearHolding(false);
     const issues = validateBlueprint(this.bp);
     const err = issues.find((i) => i.severity === 'error');
     if (err) {
@@ -1370,13 +1408,17 @@ export class BuildMode {
       return;
     }
     const warn = issues.find((i) => i.severity === 'warn');
-    if (warn) this.host.thought.say(warn.message + '. Taking it anyway!', 3500);
+    if (warn) this.host.thought.say(warn.message + '. Leaving it anyway.', 3500);
     this.bp.name = nameMachine(this.bp);
     this.host.onDone(this.bp);
   }
 
-  private leave() {
-    this.host.onExit(this.bp);
+  /** Does anything on the mat still need a battery? (GO would be a let-down.) */
+  private warnBeforeGo(): boolean {
+    const warn = validateBlueprint(this.bp).find((i) => i.severity === 'warn');
+    if (!warn) return false;
+    this.host.thought.say(warn.message + '. Try it anyway?', 3500);
+    return true;
   }
 
   private saveCreation() {
@@ -1419,7 +1461,7 @@ export class BuildMode {
   private guidePlacement(): Placement | null {
     const g = this.guide;
     const step = this.guideStep();
-    if (!g || !step || !this.holding || this.holding.def !== step.part) return null;
+    if (!g || !step || !this.holding || this.holding.def !== step.part || step.tie) return null;
     if (step.free) return placeFree(this.bp, step.part, step.free[0], step.free[1], step.spin ?? 0, step.socket);
     if (step.into) {
       const uid = g.uids[step.into.step];
@@ -1469,9 +1511,36 @@ export class BuildMode {
       return;
     }
     g.uids[g.step] = uid;
+    this.guideNext();
+  }
+
+  /** A rope / bungee was tied: does it satisfy the current tie step? */
+  private guideAdvanceTie(def: string, linkUid: number) {
+    const g = this.guide;
+    const step = this.guideStep();
+    if (!g || !step?.tie || step.part !== def) return;
+    const l = this.bp.links.find((x) => x.part === linkUid);
+    if (!l) return;
+    const ends = [l.a.part, l.b.part];
+    const want = [g.uids[step.tie.a], g.uids[step.tie.b]];
+    if (!(ends.includes(want[0]) && ends.includes(want[1]))) {
+      this.host.thought.say('Tied it somewhere else. Going my own way, then.', 2500);
+      this.guide = null;
+      return;
+    }
+    if (step.tie.length !== undefined) {
+      const p = findPart(this.bp, linkUid);
+      if (p) p.settings = { ...p.settings, length: step.tie.length };
+    }
+    g.uids[g.step] = linkUid;
+    this.guideNext();
+  }
+
+  private guideNext() {
+    const g = this.guide!;
     g.step++;
     if (g.step >= g.idea.steps.length) {
-      this.host.thought.say(`Done! ${g.idea.after} (Tap ✔ DONE up top.)`, 8000);
+      this.host.thought.say(`Built! ${g.idea.after}`, 9000);
       this.host.audio.play('discover');
       this.guide = null;
       this.guideFinished = true;
@@ -1491,6 +1560,7 @@ export class BuildMode {
       m.setMatrixAt(i, mtx);
     });
     m.position.copy(this.host.benchOrigin);
+    m.quaternion.copy(this.R);
     this.studMesh = m;
     this.host.r.scene.add(m);
   }
@@ -1506,12 +1576,14 @@ export class BuildMode {
     const g = this.guide;
     const have = this.host.stash.infinite || this.host.stash.count(step.part) > 0;
     const def = getPart(step.part);
+    let how: string;
+    if (!have) how = `You are out of ${def.name}s. Any lying around the yard? Pick one up and ADD TO KIT.`;
+    else if (step.tie) how = !this.holding ? `Tap the ${def.name} in the kit below 👇` : this.linkStart ? 'Now tap where the other end goes' : 'Tap where one end should tie on';
+    else how = !this.holding ? `Tap the ${def.name} in the kit below 👇` : this.isGuideSpot(this.aim) ? 'It is on the gold ring. Tap ✔ PLACE ✨' : 'Drag it back to the gold ring ✨';
     this.guideEl.replaceChildren(
       h('div', { class: 'guide-head' }, `💡 ${g.idea.title} · step ${g.step + 1} of ${g.idea.steps.length}`),
       h('div', { class: 'guide-say' }, step.say),
-      have
-        ? h('div', { class: 'guide-part' }, !this.holding ? `Tap the ${def.name} in the tray below 👇` : this.isGuideSpot(this.aim) ? 'It is on the gold ring. Tap ✔ PLACE ✨' : 'Drag it back to the gold ring ✨')
-        : h('div', { class: 'guide-part missing' }, `You need a ${def.name}. Look in ${WHERE[step.part] ?? 'the yard'}, then bring it to the lab.`),
+      h('div', { class: `guide-part ${have ? '' : 'missing'}` }, how),
       btn('Stop guide', () => {
         this.guide = null;
         this.refresh();
@@ -1522,9 +1594,9 @@ export class BuildMode {
 
   /** The idea card: what to build, what you have, where to find the rest. */
   showIdea(first = false) {
-    const ideas = this.host.ideas();
-    const idea = ideas[0];
+    const idea = this.host.idea();
     if (!idea) return;
+    this.host.thought.hide();
     const need = new Map<string, number>();
     for (const st of idea.steps) need.set(st.part, (need.get(st.part) ?? 0) + 1);
     const rows = [...need.entries()].map(([id, n]) => {
@@ -1535,7 +1607,7 @@ export class BuildMode {
         { class: `idea-row ${ok ? 'ok' : ''}` },
         h('img', { src: partThumb(this.host.r.renderer, id), alt: '' }),
         h('span', {}, `${getPart(id).name} ${have}/${n}`),
-        h('small', {}, ok ? '✓' : `in ${WHERE[id] ?? 'the yard'}`),
+        h('small', {}, ok ? '✓' : `need ${n - have} more · look around the yard`),
       );
     });
     const wrap = h('div', { class: 'idea-card' });
@@ -1549,14 +1621,14 @@ export class BuildMode {
       this.afterChange();
     };
     wrap.append(
-      h('div', { class: 'muted' }, first ? 'First time in the lab? Here is one idea. You can build anything, though!' : 'An idea'),
+      h('div', { class: 'muted' }, first ? 'Stuck? Here is one idea. It is not the only way.' : 'One idea. Not the only way.'),
       h('h2', {}, `💡 ${idea.title}`),
       h('p', {}, idea.pitch),
       h('div', { class: 'idea-list' }, ...rows),
       h(
         'div',
         { class: 'row' },
-        btn(this.bp.parts.length ? 'Clear bench & guide me' : 'Guide me', start, 'go'),
+        btn(this.bp.parts.length ? 'Clear the mat & guide me' : 'Guide me', start, 'go'),
         btn('I will figure it out', close, 'small'),
       ),
     );

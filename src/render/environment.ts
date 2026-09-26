@@ -312,7 +312,6 @@ export function buildEnvironment(opts: { grassBlades: number }): Environment {
 
   // Lab details: pegboard, sign, cardboard boxes, string lights.
   {
-    const wb = WORLD.workbench.pos;
     const peg = mat('peg', () => new THREE.MeshStandardMaterial({ map: noiseTexture('#b8905c', ['#6d4f2c'], 4, 64, 200), roughness: 1 }));
     B.box(0.03, 1.2, 3.0, peg, -13.97, 1.6, -5);
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.5), new THREE.MeshStandardMaterial({ map: labelTexture('★ BACKYARD LAB ★', '#f4e3b5', '#b03a2e', 512, 128) }));
@@ -329,7 +328,6 @@ export function buildEnvironment(opts: { grassBlades: number }): Environment {
       b.position.set(-8.1, 2.7 - Math.sin((i / 8) * Math.PI) * 0.25, -8.6 + i * 0.95);
       root.add(b);
     }
-    void wb;
   }
 
   // Distant suburb: trees and roofs on the horizon.

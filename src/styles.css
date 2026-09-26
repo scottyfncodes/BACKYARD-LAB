@@ -571,3 +571,58 @@ body.building .build-ui.guiding ~ .thought, body.building .thought { z-index: 1;
   .build-top .btn { min-height: 44px; padding: 6px 10px; font-size: 14px; border-radius: 12px; }
   .build-top .chip { font-size: 13px; max-width: 34vw; }
 }
+
+/* ---------------------------------------------------------------- briefing: the kit */
+.kit { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.kit-item {
+  position: relative;
+  width: 78px;
+  background: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  padding: 4px 2px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 3px 0 rgba(47, 36, 24, 0.3);
+}
+.kit-item img { width: 56px; height: 56px; object-fit: contain; }
+.kit-item .kit-name { font-size: 10px; font-weight: 900; text-align: center; line-height: 1.05; }
+.kit-item .count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: var(--orange);
+  color: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 99px;
+  min-width: 26px;
+  height: 26px;
+  font-weight: 900;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.kit-item .badge {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  background: var(--green);
+  color: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 1px 5px;
+  transform: rotate(-8deg);
+}
+.kit-item.new { background: #e6f7e9; animation: wanted 1.2s ease-in-out 2; }
+.card .where { font-size: 14px; font-weight: 800; opacity: 0.8; margin-top: 2px; }
+.lesson { background: #fff7d1; border: 3px dashed rgba(47, 36, 24, 0.4); border-radius: 12px; padding: 8px 12px; margin: 10px 0 4px; font-weight: 700; font-size: 15px; }
+.lesson b { display: block; font-size: 13px; opacity: 0.7; margin-bottom: 2px; }
+.card h3 { margin: 12px 0 4px; font-size: 16px; }
+@media (max-height: 480px) {
+  .kit-item { width: 64px; }
+  .kit-item img { width: 44px; height: 44px; }
+}

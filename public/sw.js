@@ -1,6 +1,6 @@
 // Offline support: cache the app shell on install, then serve cache-first and
 // refresh in the background so a new deploy shows up on the next launch.
-const CACHE = 'backyard-lab-v1';
+const CACHE = 'backyard-lab-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

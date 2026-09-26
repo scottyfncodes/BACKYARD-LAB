@@ -5,6 +5,8 @@ import { Builder } from '../src/sim/blueprint';
 import { initPhysics, toV } from '../src/sim/physics';
 import { emptyInput, Simulation } from '../src/sim/simulation';
 import { place, rcCar, runUntil, steerTo, successOf } from './helpers';
+import { IDEAS } from '../src/data/ideas';
+import { available, follow } from './ideas.test';
 
 beforeAll(async () => {
   await initPhysics();
@@ -177,16 +179,105 @@ describe('THE KITE, machine version', () => {
 });
 
 describe("BISCUIT'S BALL is solvable", () => {
-  it('SUCK: a vacuum aimed under the shed pulls the tennis ball out', () => {
+  it('SUCK: the Big Vac idea aimed under the shed pulls the tennis ball out', () => {
     const sim = new Simulation({ project: PROJECT_MAP.dog_ball });
-    const b = new Builder('vac');
-    const bat = b.free('battery_car');
-    b.on('vacuum', 'back', bat, [0, 0.08, 0.09], [0, 0, 1]);
+    const bp = follow(IDEAS.find((i) => i.id === 'big_vac')!);
     // Nozzle faces machine +z; yaw -90deg points it at -x (under the shed).
-    place(sim, b.bp, -6.55, 11.1, -Math.PI / 2);
+    place(sim, bp, -6.55, 11.1, -Math.PI / 2);
     sim.run(0.3);
     sim.goAll();
     const ok = runUntil(sim, 20, emptyInput, () => !!successOf(sim));
     expect(ok).toBe(true);
+  });
+});
+
+describe('TREEHOUSE LUNCH is solvable', () => {
+  it('LIFT: balloons on a bucket, roped to a brick, float the lunchbox up beside the treehouse', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.treehouse_lunch });
+    sim.run(0.5);
+    const bp = follow(IDEAS.find((i) => i.id === 'balloon_lift')!);
+    const m = place(sim, bp, 4.9, 7.6, 0);
+    sim.run(0.5);
+    // The kid drops the lunchbox into the bucket.
+    const lunch = sim.itemByTag('target')!;
+    const bucket = bp.parts.find((p) => p.def === 'bucket')!;
+    const bp0 = m.partWorldPose(bucket.uid)!.p;
+    lunch.rb.setTranslation({ x: bp0.x, y: bp0.y + 0.4, z: bp0.z }, true);
+    lunch.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    sim.run(1.0);
+    expect(toV(lunch.rb.translation()).y).toBeLessThan(0.3);
+    sim.goAll();
+    const ok = runUntil(sim, 15, emptyInput, () => !!successOf(sim));
+    expect(ok).toBe(true);
+    // ...and it did not float off into the sky.
+    expect(toV(lunch.rb.translation()).y).toBeLessThan(5);
+  });
+
+  it('LIFT (too heavy): with only the two kit bunches the bucket never leaves the ground', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.treehouse_lunch });
+    sim.run(0.5);
+    const b = new Builder('weak lift');
+    const bucket = b.free('bucket', 0, 0);
+    b.on('balloons', 'string', bucket, [0.12, 0.15, 0], [0, 1, 0]);
+    b.on('balloons', 'string', bucket, [-0.12, 0.15, 0], [0, 1, 0]);
+    const m = place(sim, b.bp, 4.9, 7.6, 0);
+    sim.run(0.5);
+    sim.goAll();
+    sim.run(4);
+    expect(m.partWorldPose(bucket)!.p.y).toBeLessThan(0.5);
+  });
+});
+
+describe('SPECIAL DELIVERY is solvable', () => {
+  it('FLING: the Fence Flinger idea throws the newspaper over the fence into the neighbour\'s yard', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.newspaper });
+    sim.run(0.5);
+    const bp = follow(IDEAS.find((i) => i.id === 'fence_flinger')!);
+    const m = place(sim, bp, 13.0, 1.0, 0);
+    sim.run(0.5);
+    // The kid puts the paper on the free end of the arm.
+    const arm = bp.parts.find((p) => p.def === 'plank')!;
+    const ap = m.partWorldPose(arm.uid)!;
+    const at = new Vector3(-0.5, 0.06, 0).applyQuaternion(ap.q).add(ap.p);
+    const paper = sim.itemByTag('target')!;
+    paper.rb.setTranslation({ x: at.x, y: at.y + 0.06, z: at.z }, true);
+    paper.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    sim.run(1);
+    sim.goAll();
+    const ok = runUntil(sim, 10, emptyInput, () => !!successOf(sim));
+    expect(ok).toBe(true);
+  });
+
+  it('FLING (weak): one crate and one bungee does not clear the fence', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.newspaper });
+    sim.run(0.5);
+    const b = new Builder('weak');
+    const base = b.free('crate');
+    const hinge = b.on('hinge', 'base', base, [0, 0.2, -0.15], [0, 1, 0]);
+    const arm = b.into('plank', 'flat', hinge, 'swing', 90);
+    b.link('bungee', arm, [0.55, 0.015, 0], base, [0, -0.1, 0.25]);
+    const m = place(sim, b.bp, 13.0, 1.0, 0);
+    sim.run(0.5);
+    const ap = m.partWorldPose(arm)!;
+    const at = new Vector3(-0.5, 0.06, 0).applyQuaternion(ap.q).add(ap.p);
+    const paper = sim.itemByTag('target')!;
+    paper.rb.setTranslation({ x: at.x, y: at.y + 0.06, z: at.z }, true);
+    paper.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    sim.run(1);
+    sim.goAll();
+    sim.run(6);
+    expect(successOf(sim)).toBeUndefined();
+    expect(toV(paper.rb.translation()).x).toBeLessThan(15);
+  });
+});
+
+describe('every problem is solvable with only what it hands out', () => {
+  it('each idea uses nothing beyond the kit and the yard', () => {
+    for (const idea of IDEAS) {
+      const have = available(idea.project);
+      const used = new Map<string, number>();
+      for (const p of follow(idea).parts) used.set(p.def, (used.get(p.def) ?? 0) + 1);
+      for (const [id, n] of used) expect(have.get(id) ?? 0, `${idea.id}: ${id}`).toBeGreaterThanOrEqual(n);
+    }
   });
 });

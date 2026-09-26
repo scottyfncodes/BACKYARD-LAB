@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Builder } from '../src/sim/blueprint';
 import { completeProject, defaultSave, discover, isUnlocked, loadSave, parseSave, sandboxParts, SAVE_KEY, writeSave } from '../src/game/save';
+import { PROJECTS } from '../src/data/projects';
 
 class MemStore {
   data = new Map<string, string>();
@@ -44,7 +45,7 @@ describe('save / load', () => {
       }),
     );
     expect(evil.discovered).toEqual(['motor']);
-    expect(evil.unlocked).toEqual(['ball_over_fence']);
+    expect(evil.unlocked).toEqual(['dog_ball']);
     expect(evil.completed.ball_over_fence.bestTime).toBe(0);
     expect(evil.completed.fake).toBeUndefined();
     expect(evil.settings.sensitivity).toBe(1);
@@ -68,20 +69,29 @@ describe('save / load', () => {
 });
 
 describe('progression', () => {
-  it('starts with only the first project; solving it unlocks the next ones and the sandbox', () => {
+  it('starts with only the first problem; solving it unlocks the next one and the sandbox', () => {
     const s = defaultSave();
-    expect(isUnlocked(s, 'ball_over_fence')).toBe(true);
+    expect(isUnlocked(s, 'dog_ball')).toBe(true);
     expect(isUnlocked(s, 'kite_in_tree')).toBe(false);
     expect(s.sandbox).toBe(false);
-    const u = completeProject(s, 'ball_over_fence', 200, []);
-    expect(u.projects).toEqual(['kite_in_tree', 'dog_ball']);
+    const u = completeProject(s, 'dog_ball', 200, []);
+    expect(u.projects).toEqual(['kite_in_tree']);
     expect(u.sandbox).toBe(true);
     expect(isUnlocked(s, 'kite_in_tree')).toBe(true);
     // Replaying keeps the best time and accumulates bonuses.
-    completeProject(s, 'ball_over_fence', 150, ['quick']);
-    completeProject(s, 'ball_over_fence', 300, ['hands_off']);
-    expect(s.completed.ball_over_fence.bestTime).toBe(150);
-    expect(s.completed.ball_over_fence.bonuses.sort()).toEqual(['hands_off', 'quick']);
+    completeProject(s, 'dog_ball', 150, ['quick']);
+    completeProject(s, 'dog_ball', 300, ['hands_off']);
+    expect(s.completed.dog_ball.bestTime).toBe(150);
+    expect(s.completed.dog_ball.bonuses.sort()).toEqual(['hands_off', 'quick']);
+  });
+
+  it('every problem is reachable: the chain of unlocks covers all of them in order', () => {
+    const s = defaultSave();
+    for (const p of PROJECTS) {
+      expect(isUnlocked(s, p.id), `${p.id} should be unlocked by now`).toBe(true);
+      completeProject(s, p.id, 100, []);
+    }
+    expect(Object.keys(s.completed).length).toBe(PROJECTS.length);
   });
 
   it('the sandbox offers exactly the junk you have discovered', () => {

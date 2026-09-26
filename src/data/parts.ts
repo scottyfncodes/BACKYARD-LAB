@@ -101,7 +101,6 @@ export interface PartDef {
   visual: string;
   color?: number;
   buildable: boolean;
-  stage: number;
 }
 
 const bucketWalls = (): ShapeDef[] => {
@@ -143,7 +142,6 @@ export const PARTS: PartDef[] = [
     visual: 'plank',
     color: 0xc79a62,
     buildable: true,
-    stage: 1,
   },
   {
     id: 'crate',
@@ -164,7 +162,6 @@ export const PARTS: PartDef[] = [
     visual: 'crate',
     color: 0xa87a45,
     buildable: true,
-    stage: 1,
   },
   {
     id: 'broom',
@@ -187,7 +184,6 @@ export const PARTS: PartDef[] = [
     drag: 0.04,
     visual: 'broom',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'skateboard',
@@ -213,7 +209,6 @@ export const PARTS: PartDef[] = [
     visual: 'skateboard',
     color: 0x2f7fc1,
     buildable: true,
-    stage: 1,
   },
   {
     id: 'bucket',
@@ -234,7 +229,6 @@ export const PARTS: PartDef[] = [
     visual: 'bucket',
     color: 0xe8b830,
     buildable: true,
-    stage: 1,
   },
   {
     id: 'lawn_wheel',
@@ -250,7 +244,6 @@ export const PARTS: PartDef[] = [
     angularDamping: 0.05,
     visual: 'lawn_wheel',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'bike_wheel',
@@ -266,7 +259,6 @@ export const PARTS: PartDef[] = [
     angularDamping: 0.02,
     visual: 'bike_wheel',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'motor',
@@ -290,7 +282,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'motor', torque: 5.5, rpm: 230, watts: 110 }],
     visual: 'motor',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'battery_small',
@@ -308,7 +299,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'battery', energy: 18000, maxWatts: 260 }],
     visual: 'battery_small',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'battery_car',
@@ -326,7 +316,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'battery', energy: 250000, maxWatts: 1600 }],
     visual: 'battery_car',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'box_fan',
@@ -348,7 +337,6 @@ export const PARTS: PartDef[] = [
     drag: 0.25,
     visual: 'box_fan',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'vacuum',
@@ -372,12 +360,11 @@ export const PARTS: PartDef[] = [
     ],
     visual: 'vacuum',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'balloons',
     name: 'Party Balloons',
-    hint: 'They pull UP. A few of them could lift something small.',
+    hint: 'They pull UP. A few bunches could lift something small.',
     traits: ['lift', 'buoyant', 'fragile string'],
     material: 'foam',
     mass: 0.06,
@@ -386,13 +373,12 @@ export const PARTS: PartDef[] = [
       { id: 'string', label: 'string', pos: [0, -1.1, 0], normal: [0, -1, 0], up: [0, 0, 1], joint: 'tether', tether: 0.84 },
     ],
     strength: 60,
-    behaviors: [{ type: 'buoyancy', lift: 3.4 }],
+    behaviors: [{ type: 'buoyancy', lift: 5.5 }],
     drag: 0.22,
     linearDamping: 0.3,
     angularDamping: 0.6,
     visual: 'balloons',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'rope',
@@ -408,7 +394,6 @@ export const PARTS: PartDef[] = [
     link: { kind: 'rope', length: 3, lengthOptions: [0.5, 1, 2, 3, 4, 6], stiffness: 4000, damping: 0.6, breakForce: 700, maxSpan: 6, radius: 0.01 },
     visual: 'rope',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'bungee',
@@ -424,7 +409,6 @@ export const PARTS: PartDef[] = [
     link: { kind: 'elastic', length: 0.4, stiffness: 420, damping: 0.25, breakForce: 900, maxSpan: 1.8, radius: 0.012 },
     visual: 'bungee',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'spring',
@@ -440,7 +424,6 @@ export const PARTS: PartDef[] = [
     link: { kind: 'spring', length: 0.35, stiffness: 2200, damping: 0.2, breakForce: 2500, maxSpan: 0.8, minLength: 0.1, radius: 0.035 },
     visual: 'spring',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'hinge',
@@ -458,7 +441,6 @@ export const PARTS: PartDef[] = [
     behaviors: [],
     visual: 'hinge',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'duct_tape',
@@ -473,7 +455,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'sticky', hold: 55 }],
     visual: 'duct_tape',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'bottle_rocket',
@@ -492,7 +473,6 @@ export const PARTS: PartDef[] = [
     drag: 0.01,
     visual: 'bottle_rocket',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'timer',
@@ -507,7 +487,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'timer', delay: 3, options: [1, 2, 3, 5, 8] }],
     visual: 'timer',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'pressure_plate',
@@ -522,7 +501,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'pressure', threshold: 10 }],
     visual: 'pressure_plate',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'rc_receiver',
@@ -537,7 +515,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'receiver' }],
     visual: 'rc_receiver',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'winch',
@@ -556,7 +533,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'winch', speed: 0.6, force: 450, watts: 140 }],
     visual: 'winch',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'trampoline',
@@ -571,7 +547,6 @@ export const PARTS: PartDef[] = [
     behaviors: [{ type: 'bounce', boost: 3.4 }],
     visual: 'trampoline',
     buildable: true,
-    stage: 1,
   },
   {
     id: 'brick',
@@ -589,7 +564,6 @@ export const PARTS: PartDef[] = [
     behaviors: [],
     visual: 'brick',
     buildable: true,
-    stage: 1,
   },
 
   // ---- Props: things the world cares about, not building material ----
@@ -609,7 +583,6 @@ export const PARTS: PartDef[] = [
     angularDamping: 0.6,
     visual: 'playground_ball',
     buildable: false,
-    stage: 1,
   },
   {
     id: 'kite',
@@ -627,7 +600,40 @@ export const PARTS: PartDef[] = [
     angularDamping: 1.0,
     visual: 'kite',
     buildable: false,
-    stage: 1,
+  },
+  {
+    id: 'newspaper',
+    name: "Mrs. Okafor's Newspaper",
+    hint: 'Rolled up and rubber-banded. It landed in OUR yard.',
+    traits: ['light', 'rolled up'],
+    material: 'fabric',
+    mass: 0.25,
+    shapes: [{ kind: 'cyl', r: 0.035, halfH: 0.15, axis: 'x' }],
+    sockets: [],
+    strength: 1e9,
+    behaviors: [],
+    drag: 0.03,
+    linearDamping: 0.05,
+    angularDamping: 0.3,
+    visual: 'newspaper',
+    buildable: false,
+  },
+  {
+    id: 'lunchbox',
+    name: 'Lunchbox',
+    hint: 'Sandwich, apple, juice box. Treehouse rules say no climbing with food.',
+    traits: ['light', 'precious cargo'],
+    material: 'plastic',
+    mass: 0.25,
+    shapes: [{ kind: 'box', half: [0.08, 0.05, 0.06] }],
+    sockets: [],
+    strength: 1e9,
+    behaviors: [],
+    drag: 0.03,
+    linearDamping: 0.1,
+    angularDamping: 0.5,
+    visual: 'lunchbox',
+    buildable: false,
   },
   {
     id: 'tennis_ball',
@@ -645,7 +651,6 @@ export const PARTS: PartDef[] = [
     angularDamping: 0.8,
     visual: 'tennis_ball',
     buildable: false,
-    stage: 1,
   },
 ];
 

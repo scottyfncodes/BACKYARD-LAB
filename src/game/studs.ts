@@ -17,7 +17,6 @@ export interface Stud {
 }
 
 const STEP = 0.15;
-const BENCH_STEP = 0.1;
 
 function spread(half: number, max: number): number[] {
   const n = Math.max(1, Math.min(max, Math.round((half * 2) / STEP)));
@@ -26,7 +25,7 @@ function spread(half: number, max: number): number[] {
   return out;
 }
 
-export function generateStuds(bp: Blueprint, opts: { forLink: boolean; bench: { x: number; z: number } }): Stud[] {
+export function generateStuds(bp: Blueprint, opts: { forLink: boolean; bench: { x: number; z: number; step?: number } }): Stud[] {
   const studs: Stud[] = [];
   // Special joint points first, so they win when de-duplicating.
   for (const p of bp.parts) {
@@ -102,12 +101,13 @@ export function generateStuds(bp: Blueprint, opts: { forLink: boolean; bench: { 
     }
   }
   if (!opts.forLink) {
-    // A grid centred on the bench, like the studs on a baseplate.
-    const nx = Math.floor(opts.bench.x / BENCH_STEP + 1e-6);
-    const nz = Math.floor(opts.bench.z / BENCH_STEP + 1e-6);
+    // A grid centred on the mat, like the studs on a baseplate.
+    const step = opts.bench.step ?? 0.1;
+    const nx = Math.floor(opts.bench.x / step + 1e-6);
+    const nz = Math.floor(opts.bench.z / step + 1e-6);
     for (let ix = -nx; ix <= nx; ix++) {
       for (let iz = -nz; iz <= nz; iz++) {
-        studs.push({ part: null, point: new Vector3(ix * BENCH_STEP, 0, iz * BENCH_STEP), normal: new Vector3(0, 1, 0) });
+        studs.push({ part: null, point: new Vector3(ix * step, 0, iz * step), normal: new Vector3(0, 1, 0) });
       }
     }
   }

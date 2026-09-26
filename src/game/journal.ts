@@ -23,6 +23,13 @@ export class RunJournal {
   private stillTime = 0;
   settled = false;
   private anyPowered = false;
+  private sucking = false;
+  private sucked = false;
+  private blowing = false;
+  private lifting = false;
+  private maxRise = 0;
+  private targetMoved = 0;
+  private targetStart: Vector3 | null = null;
 
   begin(sim: Simulation) {
     this.findings.clear();
@@ -31,6 +38,10 @@ export class RunJournal {
     this.flipTime = this.stuckTime = this.spinTime = this.maxY = this.maxMove = this.time = this.stillTime = 0;
     this.settled = false;
     this.anyPowered = false;
+    this.sucking = this.sucked = this.blowing = this.lifting = false;
+    this.maxRise = this.targetMoved = 0;
+    const t = sim.itemByTag('target');
+    this.targetStart = t ? toV(t.rb.translation()) : null;
   }
 
   private add(key: string, weight: number, line: string) {
@@ -66,6 +77,9 @@ export class RunJournal {
       case 'live':
         this.anyPowered = true;
         break;
+      case 'suck':
+        this.sucked = true;
+        break;
     }
   }
 
@@ -93,6 +107,14 @@ export class RunJournal {
         if (Math.abs(w.y) > 2.5 && v.length() < 1.2) this.spinTime += dt;
         if (Math.abs(throttle) > 0.5 && v.length() < 0.12 && m.hasReceiver()) this.stuckTime += dt;
       }
+      this.maxRise = Math.max(this.maxRise, c.y - s.y);
+      for (const p of m.parts.values()) {
+        for (const b of p.def.behaviors) {
+          if (b.type === 'suction' && p.active) this.sucking = true;
+          if (b.type === 'airflow' && p.active) this.blowing = true;
+          if (b.type === 'buoyancy') this.lifting = true;
+        }
+      }
       if (inZone(c, 'neighbor_yard') && !inZone(s, 'neighbor_yard')) this.add('neighbor', 5, "Aaaand it's in the neighbor's yard now.");
       if (inZone(c, 'in_tree') && c.y > 1.6) this.add('tree', 6, "It's in the tree. Great. Now there are TWO things in the tree.");
     }
@@ -100,6 +122,11 @@ export class RunJournal {
     if (this.spinTime > 1.5) this.add('spin', 6, 'It just spins in circles. Something is pushing harder on one side.');
     if (this.stuckTime > 1.5) this.add('stuck', 7, "It's stuck. Wheels spinning, going nowhere.");
     if (this.maxY > 7) this.add('high', 4, 'WHOA. That went HIGH.');
+    const t = sim.itemByTag('target');
+    if (t && this.targetStart) this.targetMoved = Math.max(this.targetMoved, toV(t.rb.translation()).distanceTo(this.targetStart));
+    if (this.time > 3 && this.sucking && !this.sucked && this.targetMoved < 0.1) this.add('suck_miss', 5, 'The vac is running, but it is not sucking anything. Closer? Point it straight at it?');
+    if (this.time > 3 && this.blowing && this.targetMoved < 0.1) this.add('blow_miss', 5, 'The fan is blowing, but not at the right thing. Where is the wind actually going?');
+    if (this.time > 3 && this.lifting && this.maxRise < 0.1) this.add('too_heavy', 6, 'The balloons are trying, but it is too heavy. Fewer things on it, or more balloons.');
     if (this.time > 2 && !moving) this.stillTime += dt;
     else this.stillTime = 0;
     if (this.stillTime > 1.5) this.settled = true;

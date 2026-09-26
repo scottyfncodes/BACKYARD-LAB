@@ -4,7 +4,7 @@ import type { V3 } from './parts';
 /**
  * The backyard, as data. The simulation turns `solids` into static colliders;
  * the renderer dresses each solid according to its `vis` tag. Zones are named
- * volumes that objectives and the lab use.
+ * volumes that objectives use.
  *
  * Axes: +X east (towards the neighbour), +Z south (towards the back fence),
  * the house is to the north.
@@ -63,12 +63,10 @@ const fenceZ = (z: number, x0: number, x1: number, h = FENCE_H, vis = 'fence'): 
 export const WORLD = {
   bounds: { min: [-22, -6, -22] as V3, max: [36, 60, 24] as V3 },
   playerSpawn: { pos: [-1.5, 0, -6.2] as V3, yaw: 200 },
-  workbench: { pos: [-11, 0, -5] as V3, top: 0.78, half: [0.75, 0.4] as [number, number] },
   zones: [
     { id: 'home_yard', min: [-14, -1, -10], max: [15, 30, 14] },
     { id: 'neighbor_yard', min: [15, -1, -10], max: [28, 30, 14] },
-    { id: 'lab', min: [-14, -1, -9], max: [-8, 4, -1] },
-    { id: 'under_shed', min: [-12.1, -1, 8.9], max: [-7.9, 0.14, 13.1] },
+    { id: 'under_shed', min: [-11.9, -1, 9.1], max: [-8.1, 0.14, 12.9] },
     { id: 'in_tree', min: [3, 1.2, 3], max: [10, 12, 10] },
   ] as ZoneDef[],
   solids: [
@@ -122,71 +120,35 @@ export const WORLD = {
     // patio table on the deck
     { kind: 'box', pos: [2.4, 0.55, -8.4], half: [0.55, 0.37, 0.55], mat: 'wood', vis: 'patio_table' },
   ] as SolidDef[],
-  /** Loose junk lying around the yard. The same for every project. */
+  /**
+   * Junk that is always lying around the yard, whatever the project. It is
+   * not part of any kit: if the kid thinks "wait, I could use THAT", they can
+   * pick it up and add it to the mat.
+   */
   junk: [
-    // lab (garage)
-    { part: 'motor', pos: [-11.3, 0.86, -5.2], rotY: 20 },
-    { part: 'motor', pos: [-10.8, 0.86, -4.8], rotY: -15 },
-    { part: 'battery_small', pos: [-10.5, 0.86, -5.25] },
-    { part: 'duct_tape', pos: [-11.6, 0.82, -4.8] },
-    { part: 'duct_tape', pos: [-13.7, 0.94, -4.2] },
-    { part: 'hinge', pos: [-11.5, 0.8, -4.72] },
-    { part: 'hinge', pos: [-13.7, 0.94, -5.8] },
-    { part: 'timer', pos: [-13.7, 0.97, -6.2] },
-    { part: 'winch', pos: [-13.6, 0.1, -7.6], rotY: 90 },
-    { part: 'vacuum', pos: [-13.4, 0.2, -2.0] },
-    { part: 'battery_car', pos: [-12.8, 0.12, -8.3] },
-    { part: 'broom', pos: [-9.2, 0.05, -8.4], rot: [0, 0, 0] },
-    { part: 'plank', pos: [-9.5, 0.03, -2.2], rotY: 10 },
-    // deck
-    { part: 'box_fan', pos: [0.5, 0.42, -9.2], rotY: 150 },
-    { part: 'balloons', pos: [3.2, 1.6, -7.7], tie: [3.0, 0.6, -7.9] },
-    { part: 'balloons', pos: [3.6, 1.6, -8.1], tie: [3.0, 0.6, -7.9] },
-    { part: 'rc_receiver', pos: [-3.8, 0.24, -8.6] },
-    { part: 'pressure_plate', pos: [-1, 0.2, -9.5] },
-    { part: 'bottle_rocket', pos: [5.5, 0.18, -9.4] },
-    { part: 'bottle_rocket', pos: [5.8, 0.18, -9.3] },
     // junk pile by the garage
     { part: 'crate', pos: [-6.5, 0.2, 2.5], rotY: 12 },
     { part: 'crate', pos: [-7.2, 0.2, 3.3], rotY: -20 },
-    { part: 'crate', pos: [-6.8, 0.61, 2.8], rotY: 40 },
     { part: 'plank', pos: [-5.6, 0.03, 3.4], rotY: 70 },
     { part: 'plank', pos: [-5.8, 0.07, 3.6], rotY: 80 },
-    { part: 'lawn_wheel', pos: [-7.8, 0.1, 1.6], rot: [90, 0, 0] },
-    { part: 'lawn_wheel', pos: [-7.5, 0.03, 1.2], rot: [0, 0, 0] },
-    { part: 'lawn_wheel', pos: [-7.1, 0.03, 1.3], rot: [0, 30, 0] },
-    { part: 'lawn_wheel', pos: [-7.3, 0.08, 1.2], rot: [0, 60, 0] },
     { part: 'bucket', pos: [-5.9, 0.16, 1.7] },
-    { part: 'spring', pos: [-6.2, 0.06, 4.2] },
-    { part: 'spring', pos: [-6.0, 0.06, 4.4] },
-    // by the shed
-    { part: 'bike_wheel', pos: [-7.6, 0.3, 10.2], rot: [0, 90, 0] },
-    { part: 'bike_wheel', pos: [-7.6, 0.3, 10.8], rot: [0, 90, 0] },
-    { part: 'rope', pos: [-7.7, 0.05, 12.2] },
-    { part: 'rope', pos: [-7.7, 0.05, 12.6] },
-    { part: 'bungee', pos: [-7.5, 0.04, 11.6] },
-    { part: 'bungee', pos: [-7.4, 0.04, 11.4] },
-    { part: 'bungee', pos: [-7.6, 0.04, 11.8] },
     // garden
-    { part: 'bucket', pos: [3.0, 0.4, 12.2] },
     { part: 'brick', pos: [11.8, 0.3, 12.4] },
     { part: 'brick', pos: [11.5, 0.3, 12.5] },
-    { part: 'brick', pos: [11.2, 0.3, 12.4] },
-    // sandbox & lawn
+    // lawn
     { part: 'skateboard', pos: [0.2, 0.02, 7.8], rotY: 30 },
-    { part: 'trampoline', pos: [2.5, 0.0, 1.5] },
   ] as SpawnDef[],
 };
 
 /** What the kid thinks when looking at bits of the world (by solid id). */
 export const LOOK_HINTS: Record<string, string> = {
-  workbench: 'My lab bench. I can build stuff here.',
+  workbench: 'The old workbench. I do not need it: the whole yard is my lab now.',
   fence_gap: 'Something dug under the fence here. There is a little gap at the bottom...',
   gate: 'Locked. The latch is on THEIR side.',
   shed: 'The shed sits up on blocks. There is a skinny gap underneath.',
   trunk: 'The big tree. The treehouse is up there.',
   house: 'Home. Mom said no building stuff inside.',
-  garage_back: 'The lab. Everything useful ends up in here eventually.',
+  garage_back: 'The garage. Everything useful ends up in here eventually.',
 };
 
 export function zone(id: string): ZoneDef {

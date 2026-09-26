@@ -56,6 +56,8 @@ export class RopeSim {
       const t = i / this.segments;
       const p = a.clone().lerp(b, t);
       p.y -= sag * 4 * t * (1 - t);
+      // Never start inside the ground.
+      p.y = Math.max(p.y, Math.min(a.y, b.y, 0.05));
       this.pts.push(p);
       this.prev.push(p.clone());
     }
