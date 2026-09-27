@@ -23,6 +23,9 @@ export class RunJournal {
   private stillTime = 0;
   settled = false;
   private anyPowered = false;
+  private anyReceiver = false;
+  private anySuction = false;
+  private sucked = false;
 
   begin(sim: Simulation) {
     this.findings.clear();
@@ -31,6 +34,10 @@ export class RunJournal {
     this.flipTime = this.stuckTime = this.spinTime = this.maxY = this.maxMove = this.time = this.stillTime = 0;
     this.settled = false;
     this.anyPowered = false;
+    this.anyReceiver = false;
+    this.anySuction = false;
+    this.sucked = false;
+    for (const m of sim.machines.values()) if (m.bp.parts.some((p) => getPart(p.def).behaviors.some((b) => b.type === 'suction'))) this.anySuction = true;
   }
 
   private add(key: string, weight: number, line: string) {
@@ -58,13 +65,16 @@ export class RunJournal {
         this.add('dead', 8, "Nothing's happening. Does it even have power? Is the battery attached to it?");
         break;
       case 'brownout':
-        this.add('brownout', 6, "It's trying... but that battery can't keep up.");
+        this.add('brownout', 6, "It's trying... but that battery can't keep up. It needs WAY more juice.");
         break;
       case 'unstick':
         this.add('unstick', 5, 'It grabbed it... and dropped it. Needs a better grip.');
         break;
       case 'live':
         this.anyPowered = true;
+        break;
+      case 'suck':
+        this.sucked = true;
         break;
     }
   }
@@ -74,6 +84,7 @@ export class RunJournal {
     let moving = false;
     for (const m of sim.machines.values()) {
       if (m.state !== 'running') continue;
+      if (m.hasReceiver()) this.anyReceiver = true;
       const c = m.center();
       const s = this.start.get(m.id) ?? c;
       this.maxMove = Math.max(this.maxMove, c.distanceTo(s));
@@ -108,6 +119,8 @@ export class RunJournal {
   verdict(): string {
     const list = [...this.findings.values()].sort((a, b) => b.weight - a.weight);
     if (list.length) return list[0].line;
+    if (this.maxMove < 0.05 && this.anyReceiver && this.anyPowered) return "It's waiting for me to drive it.";
+    if (this.anySuction && this.anyPowered && !this.sucked) return "It's sucking as hard as it can. Nothing is coming. Closer?";
     if (this.maxMove < 0.05) return this.anyPowered ? 'Huh. It just sat there.' : 'Nothing happened. Maybe it needs something to make it go?';
     if (this.maxMove < 1) return 'It did... a little something. Not enough.';
     return "Well, that didn't work.";

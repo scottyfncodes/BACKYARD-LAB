@@ -74,8 +74,11 @@ describe('progression', () => {
     expect(isUnlocked(s, 'kite_in_tree')).toBe(false);
     expect(s.sandbox).toBe(false);
     const u = completeProject(s, 'ball_over_fence', 200, []);
-    expect(u.projects).toEqual(['kite_in_tree', 'dog_ball']);
+    expect(u.projects).toEqual(['ball_again']);
     expect(u.sandbox).toBe(true);
+    expect(isUnlocked(s, 'ball_again')).toBe(true);
+    expect(isUnlocked(s, 'kite_in_tree')).toBe(false);
+    expect(completeProject(s, 'ball_again', 200, []).projects).toEqual(['kite_in_tree', 'dog_ball']);
     expect(isUnlocked(s, 'kite_in_tree')).toBe(true);
     // Replaying keeps the best time and accumulates bonuses.
     completeProject(s, 'ball_over_fence', 150, ['quick']);

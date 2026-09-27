@@ -23,7 +23,8 @@ export class Input {
   private stickEl: HTMLElement;
   private knobEl: HTMLElement;
   private gestured = false;
-  touchMode = false;
+  /** Phone/tablet: on-screen stick, no key hints. Starts true on coarse-pointer devices so the first prompts are right before the first touch. */
+  touchMode = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
 
   constructor(private surface: HTMLElement) {
     this.stickEl = document.createElement('div');

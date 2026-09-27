@@ -1,11 +1,12 @@
-import { Euler, Quaternion, Vector3 } from 'three';
+import { Euler, Matrix4, Quaternion, Vector3 } from 'three';
 import { getPart, type PartDef, type V3 } from '../data/parts';
 import type { ProjectDef } from '../data/projects';
 import { inZone, WORLD, type SpawnDef } from '../data/world';
-import type { Blueprint } from './blueprint';
+import { partPose, type Blueprint } from './blueprint';
 import type { SimEvent } from './events';
-import { composePose, DEG, eulerDeg, invertPose, partArea, shapeVolume, transformPoint, v3, type Pose } from './geom';
+import { composePose, DEG, eulerDeg, invertPose, partArea, partOBBs, shapeVolume, transformPoint, v3, type Pose } from './geom';
 import { criticalDamping, stableStiffness } from './links';
+import { Critter, type CritterTarget } from './critter';
 import { MachineInstance, type DynTarget, type MachineHost, type MachinePlacement, type RCInput } from './machine';
 import { ObjectiveTracker, outOfBounds, type ObjectiveEvent, type WorldQuery } from './objectives';
 import { DT, G_CARRIED, G_DYNAMIC, G_PLAYER, groups, GROUP, Physics, RAPIER, toQ, toV, type Collider, type Owner, type RigidBody } from './physics';
@@ -24,14 +25,15 @@ export interface Item {
 export interface SimInput {
   moveX: number; // strafe -1..1
   moveZ: number; // forward -1..1
-  yaw: number; // radians, 0 = facing -Z
-  pitch: number;
+  /** Look direction, radians, 0 = facing -Z. Leave undefined to keep the kid facing the way they were. */
+  yaw?: number;
+  pitch?: number;
   jump: boolean;
   sprint: boolean;
   rc: RCInput;
 }
 
-export const emptyInput = (): SimInput => ({ moveX: 0, moveZ: 0, yaw: 0, pitch: 0, jump: false, sprint: false, rc: { throttle: 0, steer: 0, action: false } });
+export const emptyInput = (): SimInput => ({ moveX: 0, moveZ: 0, jump: false, sprint: false, rc: { throttle: 0, steer: 0, action: false } });
 
 export const PLAYER = {
   radius: 0.22,
@@ -50,6 +52,8 @@ export interface SimOptions {
   junk?: boolean;
   project?: ProjectDef | null;
   gateOpen?: boolean;
+  /** Biscuit next door. Off by default so headless tests stay simple; the game turns him on. */
+  dog?: boolean;
 }
 
 /**
@@ -76,6 +80,7 @@ export class Simulation implements MachineHost {
   private wasGrounded = false;
   carried: { item: Item; dist: number; rel: Quaternion; age: number } | null = null;
   gateOpen = false;
+  dog: Critter | null = null;
   /** Objectives only tick while the game says the project is live (not during intros). */
   objectivesPaused = false;
   private nextId = 1;
@@ -88,6 +93,15 @@ export class Simulation implements MachineHost {
     if (opts.junk !== false) for (const j of WORLD.junk) this.spawnItem(j);
     if (opts.project) this.startProject(opts.project);
     if (opts.gateOpen) this.openGate();
+    if (opts.dog) this.dog = new Critter(this);
+  }
+
+  /** What Biscuit might chase: loose junk and the bodies of running machines. */
+  targets(): CritterTarget[] {
+    const out: CritterTarget[] = [];
+    for (const it of this.items.values()) if (this.carried?.item !== it) out.push({ rb: it.rb, machine: false });
+    for (const m of this.machines.values()) if (m.state === 'running') for (const b of m.bodies) out.push({ rb: b.rb, machine: true });
+    return out;
   }
 
   emit(e: SimEvent) {
@@ -169,6 +183,8 @@ export class Simulation implements MachineHost {
   startProject(p: ProjectDef) {
     this.objective = new ObjectiveTracker(p);
     this.projectTime = 0;
+    // Projects can start the kid somewhere else, or facing their problem.
+    if (p.spawn) this.teleportPlayer(p.spawn.pos ?? WORLD.playerSpawn.pos, p.spawn.yaw !== undefined ? p.spawn.yaw * DEG : undefined);
     for (const s of p.props) {
       const it = this.spawnItem(s);
       const snag = p.snags?.find((x) => x.tag === s.tag);
@@ -189,6 +205,7 @@ export class Simulation implements MachineHost {
       time: this.projectTime,
       pos: (tag) => {
         if (tag === 'player') return this.player ? toV(this.player.translation()) : null;
+        if (tag === 'dog') return this.dog ? this.dog.position() : null;
         const it = this.itemByTag(tag);
         return it ? toV(it.rb.translation()) : null;
       },
@@ -220,6 +237,42 @@ export class Simulation implements MachineHost {
     this.refreshMachineOwners();
   }
 
+  /**
+   * Would a blueprint set down at this placement land inside another machine? Loose junk gets
+   * shoved aside when something is placed on it; a whole machine (parked or not) does not.
+   */
+  overlapsMachine(bp: Blueprint, placement: MachinePlacement, ignoreId?: number): boolean {
+    const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), placement.yaw);
+    const base = new Vector3(...placement.pos);
+    for (const p of bp.parts) {
+      const def = getPart(p.def);
+      if (def.link) continue;
+      const pp = partPose(p);
+      const wp = { p: pp.p.clone().applyQuaternion(q).add(base), q: q.clone().multiply(pp.q) };
+      for (const o of partOBBs(def, wp, 0.015)) {
+        const rot = new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(o.axes[0], o.axes[1], o.axes[2]));
+        let hit = false;
+        this.physics.world.intersectionsWithShape(
+          { x: o.c.x, y: o.c.y + 0.02, z: o.c.z },
+          { x: rot.x, y: rot.y, z: rot.z, w: rot.w },
+          new RAPIER.Cuboid(o.h[0], o.h[1], o.h[2]),
+          (col) => {
+            const owner = this.physics.tags.get(col.handle)?.owner;
+            if (owner?.kind === 'machine' && owner.id !== ignoreId) {
+              hit = true;
+              return false;
+            }
+            return true;
+          },
+          undefined,
+          groups(0xffff, GROUP.DYNAMIC),
+        );
+        if (hit) return true;
+      }
+    }
+    return false;
+  }
+
   /** Put a machine back exactly where it was placed, frozen. */
   resetMachine(id: number): MachineInstance | null {
     const m = this.machines.get(id);
@@ -233,7 +286,7 @@ export class Simulation implements MachineHost {
   }
 
   goAll() {
-    for (const m of this.machines.values()) m.go();
+    for (const m of this.machines.values()) if (!m.parked) m.go();
     this.refreshMachineOwners();
   }
 
@@ -284,6 +337,14 @@ export class Simulation implements MachineHost {
     this.bodyOwner.set(rb.handle, { kind: 'player' });
   }
 
+  private climbT = 0;
+  private emitClimb(dt: number, pos: Vector3) {
+    this.climbT -= dt;
+    if (this.climbT > 0) return;
+    this.climbT = 0.35;
+    this.emit({ type: 'climb', pos: pos.clone() });
+  }
+
   teleportPlayer(p: V3, yaw?: number) {
     if (!this.player) return;
     this.player.setTranslation({ x: p[0], y: p[1] + PLAYER.halfHeight + PLAYER.radius + 0.02, z: p[2] }, true);
@@ -303,8 +364,8 @@ export class Simulation implements MachineHost {
   private stepPlayer(input: SimInput, dt: number) {
     const rb = this.player;
     if (!rb) return;
-    this.yaw = input.yaw;
-    this.pitch = input.pitch;
+    if (input.yaw !== undefined) this.yaw = input.yaw;
+    if (input.pitch !== undefined) this.pitch = input.pitch;
     const pos = toV(rb.translation());
     const vel = toV(rb.linvel());
     const footY = pos.y - PLAYER.halfHeight - PLAYER.radius;
@@ -333,6 +394,18 @@ export class Simulation implements MachineHost {
     const dv = new Vector3(desired.x - vel.x, 0, desired.z - vel.z);
     if (dv.length() > accel) dv.setLength(accel);
     let vy = vel.y;
+
+    // Ladders: stand at the foot, push into the rungs, and up you go.
+    const ladder = WORLD.ladders.find((l) => pos.x >= l.min[0] && pos.x <= l.max[0] && footY >= l.min[1] && footY <= l.max[1] && pos.z >= l.min[2] && pos.z <= l.max[2]);
+    if (ladder && desired.lengthSq() > 0.1 && desired.clone().normalize().dot(v3(ladder.up)) > 0.4) {
+      vy = 2.0;
+      // Hang on the rungs instead of walking under the platform; near the top, the step-up assist takes over.
+      if (footY < ladder.top - 0.25) {
+        dv.set(-vel.x, 0, -vel.z);
+        this.grounded = true;
+      }
+      this.emitClimb(dt, pos);
+    }
 
     // Step-up assist for kerbs, deck edges and junk.
     if (this.grounded && desired.lengthSq() > 0.1) {
@@ -505,6 +578,7 @@ export class Simulation implements MachineHost {
 
   step(input: SimInput = emptyInput(), dt = DT) {
     this.stepPlayer(input, dt);
+    this.dog?.step(dt);
     this.applyItemAero();
     this.stepCarry(dt);
     this.stepSnags(dt);

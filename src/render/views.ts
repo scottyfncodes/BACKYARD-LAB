@@ -4,6 +4,7 @@ import { findPart, linkWorldEnds, partPose, type Blueprint } from '../sim/bluepr
 import type { MachineInstance, LinkRt } from '../sim/machine';
 import { toQ, toV } from '../sim/physics';
 import type { Simulation } from '../sim/simulation';
+import { animateDog, dogMesh } from './critter';
 import { M } from './materials';
 import { animatePart, partMesh, springGeometry } from './parts';
 
@@ -139,6 +140,34 @@ export class MachineView {
   }
 }
 
+/**
+ * A strip of tape on the ground pointing the way a machine will face (+Z),
+ * laid just in front of its footprint. Added to a BlueprintView group so it
+ * turns with the carried ghost.
+ */
+export function forwardArrow(bounds: { min: THREE.Vector3; max: THREE.Vector3 }): THREE.Mesh {
+  const len = 0.55;
+  const shaft = 0.07;
+  const head = 0.2;
+  const shape = new THREE.Shape([
+    new THREE.Vector2(-shaft, 0),
+    new THREE.Vector2(shaft, 0),
+    new THREE.Vector2(shaft, len - head),
+    new THREE.Vector2(head, len - head),
+    new THREE.Vector2(0, len),
+    new THREE.Vector2(-head, len - head),
+    new THREE.Vector2(-shaft, len - head),
+  ]);
+  const geo = new THREE.ShapeGeometry(shape);
+  geo.rotateX(Math.PI / 2); // shape y -> world +Z, lying flat
+  const mat = new THREE.MeshBasicMaterial({ color: 0xf2d27a, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'forward';
+  mesh.renderOrder = 1;
+  mesh.position.set((bounds.min.x + bounds.max.x) / 2, bounds.min.y + 0.012, bounds.max.z + 0.06);
+  return mesh;
+}
+
 /** A blueprint drawn at an arbitrary transform (workbench, carried ghost). */
 export class BlueprintView {
   group = new THREE.Group();
@@ -192,6 +221,7 @@ export class BlueprintView {
     this.group.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh && !(o as THREE.InstancedMesh).isInstancedMesh) return;
+      if (o.name === 'forward') return; // the tape arrow keeps its own colour
       if (color === null) {
         if (mesh.userData.orig) mesh.material = mesh.userData.orig;
       } else {
@@ -230,10 +260,23 @@ export class WorldView {
   root = new THREE.Group();
   items = new Map<number, THREE.Group>();
   machines = new Map<number, MachineView>();
+  dog: THREE.Group | null = null;
+  private t = 0;
   constructor(public sim: Simulation) {}
 
   sync(dt: number) {
     const sim = this.sim;
+    this.t += dt;
+    if (sim.dog) {
+      if (!this.dog) {
+        this.dog = dogMesh();
+        this.root.add(this.dog);
+      }
+      const p = sim.dog.position();
+      this.dog.position.set(p.x, p.y - 0.28, p.z);
+      this.dog.rotation.y = sim.dog.yaw;
+      animateDog(this.dog, sim.dog.gait, this.t);
+    }
     for (const [id, it] of sim.items) {
       let g = this.items.get(id);
       if (!g) {
@@ -272,6 +315,7 @@ export class WorldView {
 
   transforms(cb: (key: string, o: THREE.Object3D) => void) {
     for (const [id, g] of this.items) cb(`i${id}`, g);
+    if (this.dog) cb('dog', this.dog);
     for (const [mid, v] of this.machines) for (const [uid, g] of v.parts) cb(`m${mid}:${uid}`, g);
   }
 

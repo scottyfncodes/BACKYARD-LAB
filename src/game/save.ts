@@ -1,5 +1,6 @@
 import { PART_MAP, PARTS } from '../data/parts';
 import { PROJECT_MAP, PROJECTS } from '../data/projects';
+import type { SpawnDef } from '../data/world';
 import { parseBlueprint, type Blueprint } from '../sim/blueprint';
 import type { MachinePlacement } from '../sim/machine';
 
@@ -12,8 +13,21 @@ export interface SaveData {
   sandbox: boolean;
   creations: { name: string; bp: Blueprint; savedAt: number }[];
   settings: { sound: boolean; sensitivity: number; hints: boolean };
+  /** One-time nudges already shown ('lab_nudge', 'drive_hint', ...). */
+  seen: string[];
+  /** Machines that solved a project stay parked in the yard (lined up along the fences; `placement` is where they did it). */
+  yard: YardMachine[];
   session: SessionData | null;
 }
+
+export interface YardMachine {
+  name: string;
+  bp: Blueprint;
+  placement: MachinePlacement;
+  project: string;
+}
+
+export const YARD_LIMIT = 8;
 
 export interface SessionData {
   mode: 'project' | 'sandbox';
@@ -35,6 +49,8 @@ export function defaultSave(): SaveData {
     sandbox: false,
     creations: [],
     settings: { sound: true, sensitivity: 1, hints: true },
+    seen: [],
+    yard: [],
     session: null,
   };
 }
@@ -84,6 +100,13 @@ export function parseSave(raw: string | null): SaveData {
     if (typeof s.sensitivity === 'number' && s.sensitivity >= 0.2 && s.sensitivity <= 3) d.settings.sensitivity = s.sensitivity;
     if (typeof s.hints === 'boolean') d.settings.hints = s.hints;
   }
+  d.seen = strList(j.seen, (s) => s.length < 40);
+  if (Array.isArray(j.yard)) {
+    for (const y of j.yard.slice(0, YARD_LIMIT)) {
+      const m = parseMachine(y);
+      if (m && typeof y.project === 'string' && PROJECT_MAP[y.project]) d.yard.push({ name: typeof y.name === 'string' ? y.name.slice(0, 40) : m.bp.name, bp: m.bp, placement: m.placement, project: y.project });
+    }
+  }
   d.session = parseSession(j.session);
   return d;
 }
@@ -98,10 +121,8 @@ function parseSession(x: unknown): SessionData | null {
   const machines: SessionData['machines'] = [];
   if (Array.isArray(s.machines)) {
     for (const m of s.machines.slice(0, 12)) {
-      const bp = parseBlueprint(m?.bp);
-      const pl = m?.placement;
-      if (!bp || !pl || !Array.isArray(pl.pos) || pl.pos.length !== 3 || !pl.pos.every((n: unknown) => typeof n === 'number' && Number.isFinite(n))) continue;
-      machines.push({ bp, placement: { pos: [pl.pos[0], pl.pos[1], pl.pos[2]], yaw: typeof pl.yaw === 'number' ? pl.yaw : 0 } });
+      const parsed = parseMachine(m);
+      if (parsed) machines.push(parsed);
     }
   }
   const stash: Record<string, number> = {};
@@ -111,6 +132,13 @@ function parseSession(x: unknown): SessionData | null {
     }
   }
   return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash };
+}
+
+function parseMachine(m: any): { bp: Blueprint; placement: MachinePlacement } | null {
+  const bp = parseBlueprint(m?.bp);
+  const pl = m?.placement;
+  if (!bp || !pl || !Array.isArray(pl.pos) || pl.pos.length !== 3 || !pl.pos.every((n: unknown) => typeof n === 'number' && Number.isFinite(n))) return null;
+  return { bp, placement: { pos: [pl.pos[0], pl.pos[1], pl.pos[2]], yaw: typeof pl.yaw === 'number' && Number.isFinite(pl.yaw) ? pl.yaw : 0 } };
 }
 
 export function loadSave(store: KV | null = typeof localStorage !== 'undefined' ? localStorage : null): SaveData {
@@ -152,6 +180,28 @@ export function completeProject(save: SaveData, projectId: string, time: number,
   const sandbox = !save.sandbox;
   save.sandbox = true;
   return { projects, sandbox };
+}
+
+/**
+ * A project was just solved: the machines that were running stay in the yard as
+ * a record of it. Solving the same project again replaces its earlier machines.
+ */
+export function rememberSolvers(save: SaveData, solvers: { name: string; bp: Blueprint; placement: MachinePlacement }[], project: string): void {
+  const kept = save.yard.filter((y) => y.project !== project);
+  const fresh = solvers.map((m) => ({ name: m.name, bp: m.bp, placement: m.placement, project }));
+  save.yard = [...fresh, ...kept].slice(0, YARD_LIMIT);
+}
+
+/** New junk that has turned up since the start: one piece per solved project. */
+export function rewardSpawns(save: SaveData): SpawnDef[] {
+  return PROJECTS.filter((p) => p.reward && save.completed[p.id]).map((p) => ({ ...p.reward! }));
+}
+
+/** Remember that a one-time nudge has been shown. Returns true the first time. */
+export function markSeen(save: SaveData, flag: string): boolean {
+  if (save.seen.includes(flag)) return false;
+  save.seen.push(flag);
+  return true;
 }
 
 export function isUnlocked(save: SaveData, projectId: string): boolean {

@@ -80,17 +80,27 @@ export class Toasts {
   }
 }
 
-/** The kid's thought bubble. */
+/**
+ * The kid's thought bubble. The outer element is only positioned (centred with a
+ * transform); the pop-in animation runs on the inner one, so the two never fight
+ * over `transform` and the bubble stays anchored while it appears.
+ */
 export class Thought {
   el: HTMLElement;
+  private inner: HTMLElement;
   private timer = 0;
   constructor(parent: HTMLElement) {
-    this.el = h('div', { class: 'thought hidden' });
+    this.inner = h('div', { class: 'thought-inner' });
+    this.el = h('div', { class: 'thought hidden' }, this.inner);
     parent.appendChild(this.el);
   }
   say(text: string, ms = 4200) {
-    this.el.textContent = text;
+    this.inner.textContent = text;
     this.el.classList.remove('hidden');
+    // Restart the pop even when one thought replaces another.
+    this.inner.style.animation = 'none';
+    void this.inner.offsetWidth;
+    this.inner.style.animation = '';
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => this.el.classList.add('hidden'), ms);
   }

@@ -121,11 +121,26 @@ const RPM = (Math.PI * 2) / 60;
 /** Rapier's revolute motor turns body 2 the opposite way to the right-hand rule on our axis. */
 const MOTOR_SIGN = -1;
 const BREAK_GRACE = 0.25;
+/** Suction weaker than this share of a thing's weight does nothing to it. */
+const SUCTION_STICTION = 0.2;
+
+/** The outward face of a sticky part: opposite its mounting socket, on its surface. */
+function stickyFace(def: PartDef): Vector3 {
+  const s = def.sockets[0];
+  const n = s ? v3(s.normal).normalize() : new Vector3(0, -1, 0);
+  const half = def.shapes[0]?.half;
+  const depth = half ? Math.abs(n.x) * half[0] + Math.abs(n.y) * half[1] + Math.abs(n.z) * half[2] : 0;
+  return n.multiplyScalar(-depth);
+}
 
 let linkIds = 1;
 
 export class MachineInstance {
+  /** A held thing is never accelerated harder than this (m/s^2) by its tape or nozzle. */
+  static GRAB_ACCEL_CAP = 30;
   state: 'frozen' | 'running' = 'frozen';
+  /** Left in the yard from an earlier project: it sits there until picked up and placed again. */
+  parked = false;
   runTime = 0;
   bodies: MBody[] = [];
   parts = new Map<number, PartRt>();
@@ -558,8 +573,14 @@ export class MachineInstance {
     if (!m) return 0;
     const clamp = (x: number) => Math.max(-1, Math.min(1, x));
     switch (m.mode) {
-      case 'drive':
-        return flip * m.sign * clamp(rc.throttle - rc.steer * m.side);
+      case 'drive': {
+        // Skid steer that a kid can actually drive: with no throttle the sides counter-rotate and
+        // the machine pivots; while rolling, the inside wheel slows to half rather than reversing
+        // (a stalled inside wheel just ploughs straight on; measured, not guessed).
+        if (Math.abs(rc.throttle) < 0.15) return flip * m.sign * clamp(-rc.steer * m.side * 0.5);
+        const inner = rc.steer * m.side > 0;
+        return flip * m.sign * clamp(rc.throttle * (inner ? 1 - 0.5 * Math.abs(rc.steer) : 1));
+      }
       case 'turret':
         return flip * m.sign * rc.steer;
       case 'throttle':
@@ -635,6 +656,9 @@ export class MachineInstance {
         }
       }
       const f = res.factor;
+      // Fan law: a browned-out impeller loses pressure with the square of its speed, so a
+      // vacuum or fan on too small a battery does not just get a bit weaker, it gets feeble.
+      const fa = f * f;
       for (const m of motors) {
         const rj = m.j.joint as RAPIER.RevoluteImpulseJoint;
         const target = m.b.rpm * RPM * m.cmd * f;
@@ -646,7 +670,7 @@ export class MachineInstance {
         m.part.active = on;
       }
       for (const fan of fans) {
-        const out = fan.cmd * f;
+        const out = fan.cmd * fa;
         fan.part.cmd = out;
         fan.part.power = f;
         fan.part.active = out > 0.01;
@@ -661,7 +685,7 @@ export class MachineInstance {
       for (const s of suckers) {
         s.part.active = f > 0.05;
         s.part.power = f;
-        if (f > 0.05) this.suck(s.part, s.b, f);
+        if (f > 0.05) this.suck(s.part, s.b, fa);
       }
       // Suction grabs only live while their vacuum is on.
       this.grabs = this.grabs.filter((g) => {
@@ -722,6 +746,9 @@ export class MachineInstance {
       if (this.host.physics.blockedByStatic(origin, p)) continue;
       const exposure = Math.min(1, t.area / 0.04);
       const mag = s.force * (1 - dist / s.range) * exposure * f;
+      // A gentle draught does not unstick something resting on the lawn: the pull has to
+      // beat a share of its weight before it moves at all (that is what a brownout loses).
+      if (mag < SUCTION_STICTION * t.rb.mass() * 9.81) continue;
       const dir = d.clone().normalize().negate();
       t.rb.addForce({ x: dir.x * mag, y: dir.y * mag, z: dir.z * mag }, true);
       part.body.rb.addForceAtPoint({ x: -dir.x * mag, y: -dir.y * mag, z: -dir.z * mag }, { x: origin.x, y: origin.y, z: origin.z }, true);
@@ -838,8 +865,19 @@ export class MachineInstance {
         }
         F.multiplyScalar(g.hold / mag);
       } else g.over = Math.max(0, g.over - dt);
+      // A light thing is not flung by a strong hold: cap what the hold can accelerate it to.
+      if (g.other.isDynamic()) {
+        const cap = g.other.mass() * MachineInstance.GRAB_ACCEL_CAP;
+        if (F.length() > cap) F.setLength(cap);
+      }
       g.other.addForceAtPoint({ x: F.x, y: F.y, z: F.z }, { x: pb.x, y: pb.y, z: pb.z }, true);
       rbA.addForceAtPoint({ x: -F.x, y: -F.y, z: -F.z }, { x: pa.x, y: pa.y, z: pa.z }, true);
+      // A taped or sucked-on thing cannot roll or spin against its holder: the bond is a patch,
+      // not a point. Otherwise a held ball rolls, the bond point swings round it and it tears loose.
+      if (g.other.isDynamic() && g.other.mass() < rbA.mass()) {
+        const w = rbA.angvel();
+        g.other.setAngvel({ x: w.x, y: w.y, z: w.z }, true);
+      }
       part.extForce += Math.min(mag, g.hold);
       return true;
     });
@@ -920,11 +958,15 @@ export class MachineInstance {
             if (this.grabs.some((gr) => gr.other.handle === other.handle && gr.part === part.uid)) continue;
             const wp = this.partWorldPose(part.uid)!;
             const op = { p: toV(other.translation()), q: toQ(other.rotation()) };
+            // Bond at the sticky face, not the pad's centre: otherwise the pad's own collider keeps
+            // pushing the thing out while the bond pulls it in, and the bond is half torn from the start.
+            const face = stickyFace(part.def);
+            const at = transformPoint(wp, face);
             this.grabs.push({
               part: part.uid,
-              partLocal: new Vector3(),
+              partLocal: face,
               other,
-              otherLocal: transformPoint(invertPose(op), wp.p),
+              otherLocal: transformPoint(invertPose(op), at),
               hold: sticky.hold,
               source: 'sticky',
               over: 0,
@@ -981,6 +1023,20 @@ export class MachineInstance {
 
   hasReceiver(): boolean {
     return this.comps.some((c) => c.receiver !== undefined);
+  }
+
+  /** Does the remote's switch do anything here (a vacuum, winch or lift fan on a group with a receiver)? */
+  hasSwitch(): boolean {
+    for (const c of this.comps) {
+      if (c.receiver === undefined) continue;
+      for (const u of c.uids) {
+        for (const b of this.parts.get(u)!.def.behaviors) {
+          if (b.type === 'suction' || b.type === 'winch') return true;
+          if (b.type === 'thrust' && b.watts && this.driveMap.get(`f${u}`)?.mode === 'lift') return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** Area for other machines' fans / vacuums. */

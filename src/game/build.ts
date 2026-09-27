@@ -53,6 +53,8 @@ export interface BuildHost {
   onTest(bp: Blueprint): void;
   onStopTest(): void;
   onChange(bp: Blueprint): void;
+  /** Battery state of the machine under test, so a brownout shows up on the bench. */
+  testPower(): { factor: number; charge: number } | null;
   creations(): { name: string; bp: Blueprint }[];
   saveCreation(bp: Blueprint): void;
   ideas(): Idea[];
@@ -172,7 +174,7 @@ export class BuildMode {
 
   // ------------------------------------------------------------------ lifecycle
 
-  enter(bp: Blueprint) {
+  enter(bp: Blueprint, opts: { quiet?: boolean } = {}) {
     this.active = true;
     this.bp = bp;
     this.view = new BlueprintView(bp);
@@ -201,8 +203,8 @@ export class BuildMode {
     });
     this.on(window, 'keydown', (e) => this.key((e as KeyboardEvent).key.toLowerCase()));
     this.on(canvas, 'contextmenu', (e) => e.preventDefault());
-    if (this.host.hints && bp.parts.length === 0) {
-      setTimeout(() => this.active && this.bp.parts.length === 0 && this.host.thought.say('My lab! Drag something from the shelf onto the bench.', 5000), 700);
+    if (this.host.hints && bp.parts.length === 0 && !opts.quiet) {
+      setTimeout(() => this.active && this.bp.parts.length === 0 && !this.guide && this.host.thought.say('My lab! Drag something from the shelf onto the bench.', 5000), 700);
     }
     this.refresh();
   }
@@ -1565,6 +1567,13 @@ export class BuildMode {
 
   update(dt: number) {
     this.time += dt;
+    if (this.testing) {
+      const pw = this.host.testPower();
+      const html = pw
+        ? `Testing…<small>⚡ ${Math.round(pw.charge * 100)}% battery${pw.factor < 0.99 ? ` · only ${Math.round(pw.factor * 100)}% power!` : ''}</small>`
+        : `Testing…<small>${this.escape(nameMachine(this.bp))}</small>`;
+      if (this.stats.innerHTML !== html) this.stats.innerHTML = html;
+    }
     if (this.aim >= 0 && this.studs[this.aim]) {
       const sc = this.toScreen(this.studs[this.aim].point);
       this.cursor = sc;

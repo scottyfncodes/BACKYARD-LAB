@@ -218,14 +218,15 @@ export function buildEnvironment(opts: { grassBlades: number }): Environment {
       }
       case 'trunk': {
         const barkM = mat('bark', () => new THREE.MeshStandardMaterial({ map: noiseTexture('#6b4b33', ['#4a3322', '#7f5d42', '#3b281a'], 1, 128, 3000), roughness: 1 }));
-        const t = new THREE.Mesh(new THREE.CylinderGeometry(s.r! * 0.8, s.r! * 1.15, s.h!, 14), barkM);
-        t.position.set(x, s.h! / 2, z);
+        const t = new THREE.Mesh(new THREE.CylinderGeometry(s.r! * 0.8, s.r! * 1.15, s.h! + 1.0, 14), barkM);
+        t.position.set(x, (s.h! + 1.0) / 2, z);
         t.castShadow = t.receiveShadow = true;
         root.add(t);
         const leafM = mat('leaves', () => new THREE.MeshStandardMaterial({ color: 0x4f8a36, roughness: 0.9, flatShading: true }));
         const leafM2 = mat('leaves2', () => new THREE.MeshStandardMaterial({ color: 0x6aa345, roughness: 0.9, flatShading: true }));
+        // Canopy sits clear of the treehouse platform, so the kid up there can actually see out.
         const blobs: [number, number, number, number][] = [
-          [0, 5.6, 0, 2.2], [1.6, 5.0, 1.0, 1.6], [-1.6, 5.1, 0.6, 1.5], [0.6, 5.2, -1.6, 1.6], [-0.8, 6.4, -0.6, 1.4], [1.4, 4.4, 1.9, 1.1], [-1.9, 4.6, -1.2, 1.1], [2.1, 4.9, -0.5, 1.2],
+          [0, 6.6, 0, 2.2], [1.6, 6.0, 1.0, 1.6], [-1.6, 6.1, 0.6, 1.5], [0.6, 6.2, -1.6, 1.6], [-0.8, 7.4, -0.6, 1.4], [1.4, 5.5, 1.9, 1.1], [-1.9, 5.7, -1.2, 1.1], [2.1, 6.0, -0.5, 1.2],
         ];
         blobs.forEach(([bx, by, bz, r], i) => {
           const geo = new THREE.IcosahedronGeometry(r, 1);
@@ -238,8 +239,6 @@ export function buildEnvironment(opts: { grassBlades: number }): Environment {
           blob.receiveShadow = true;
           root.add(blob);
         });
-        // Ladder up the trunk
-        for (let i = 0; i < 9; i++) B.box(0.4, 0.04, 0.05, M.woodDark(), x - 0.2, 0.3 + i * 0.3, z - s.r! - 0.03);
         break;
       }
       case 'treehouse': {
@@ -249,8 +248,11 @@ export function buildEnvironment(opts: { grassBlades: number }): Environment {
         const shape = new THREE.Shape([new THREE.Vector2(-h[2] - 0.2, 0), new THREE.Vector2(h[2] + 0.2, 0), new THREE.Vector2(0, 0.8)]);
         B.add(new THREE.ExtrudeGeometry(shape, { depth: h[0] * 2 + 0.3, bevelEnabled: false }), M.matte(0x2e7a4a), V(x - h[0] - 0.15, y + 1.6, z), new THREE.Euler(0, Math.PI / 2, 0));
         const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.3), new THREE.MeshStandardMaterial({ map: labelTexture('NO GROWNUPS', '#f4e3b5', '#b03a2e', 256, 96) }));
-        sign.position.set(x, y + 0.6, z + h[2] + 0.03);
+        sign.position.set(x - 0.7, y + 0.6, z + h[2] + 0.03);
         root.add(sign);
+        // Ladder up the open south side, onto the platform (see WORLD.ladders).
+        for (const lx of [-0.22, 0.22]) B.box(0.05, y + h[1] + 0.3, 0.05, M.woodDark(), x + lx, (y + h[1] + 0.3) / 2, z + h[2] + 0.06);
+        for (let i = 0; i < 9; i++) B.box(0.5, 0.04, 0.05, M.woodDark(), x, 0.3 + i * 0.3, z + h[2] + 0.06);
         break;
       }
       case 'branch': {

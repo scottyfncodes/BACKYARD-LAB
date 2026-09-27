@@ -1,14 +1,17 @@
 import * as THREE from 'three';
 import { Audio } from '../audio/audio';
 import { getPart, PART_MAP } from '../data/parts';
-import { PROJECT_MAP, PROJECTS, STAGES, type ProjectDef } from '../data/projects';
+import { BALL_INTRO, PROJECT_MAP, PROJECTS, STAGES, type ProjectDef } from '../data/projects';
 import { EAST_FENCE_X, inZone, LOOK_HINTS, WORLD } from '../data/world';
 import { buildEnvironment, type Environment } from '../render/environment';
 import { ideasFor } from '../data/ideas';
 import { Effects } from '../render/effects';
 import { detectQuality, Renderer } from '../render/renderer';
-import { BlueprintView, WorldView } from '../render/views';
+import { BlueprintView, forwardArrow, WorldView } from '../render/views';
+import { labelTexture } from '../render/materials';
 import { blueprintBounds, blueprintMass, clone, newBlueprint, partPose, type Blueprint } from '../sim/blueprint';
+import { benchTargeted, nearBench } from './bench';
+import { benchTestPlacement, facingYaw, groundedPlacement } from './placement';
 import type { SimEvent } from '../sim/events';
 import { obbBounds, partOBBs } from '../sim/geom';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
@@ -20,7 +23,7 @@ import { CameraDirector } from './camera';
 import { Input } from './input';
 import { RunJournal } from './journal';
 import { Replay } from './replay';
-import { completeProject, discover, loadSave, sandboxParts, totalBonuses, writeSave, type SaveData } from './save';
+import { completeProject, discover, loadSave, markSeen, rememberSolvers, rewardSpawns, sandboxParts, totalBonuses, writeSave, type SaveData, type YardMachine } from './save';
 
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
@@ -58,7 +61,7 @@ export class Game {
   private pitch = 0;
   private stepT = 0;
   private introT = 0;
-  private introBall: { from: THREE.Vector3; to: THREE.Vector3 } | null = null;
+  private introBall: { from: THREE.Vector3; to: THREE.Vector3; T: number; apex: number } | null = null;
   private gateAnim = 0;
   private testMachine: number | null = null;
   private actionEdge = false;
@@ -67,6 +70,13 @@ export class Game {
   private lastLookKey = '';
   private absorbedOnce = new Set<number>();
   private ideaOffered = new Set<string>();
+  /** A gentle automatic turn of the head (first visit: "the lab is over there"). Any look input cancels it. */
+  private nudge: { from: number; to: number; t: number; dur: number } | null = null;
+  private nudgeTimer: number | null = null;
+  /** Machines parked in the yard from earlier projects, and the tape labels floating over them. */
+  /** Parked machines in the sim, by machine id, with the save entry each one came from. */
+  private yardOf = new Map<number, YardMachine>();
+  private yardLabels = new Map<number, THREE.Sprite>();
 
   // UI
   ui: HTMLElement;
@@ -127,13 +137,20 @@ export class Game {
   private newSim(project: ProjectDef | null, started = true) {
     this.view?.root.removeFromParent();
     this.sim?.free();
-    this.sim = new Simulation({ project: started ? project : null, gateOpen: !project });
+    this.sim = new Simulation({ project: started ? project : null, gateOpen: !project, dog: true });
+    for (const l of this.yardLabels.values()) l.removeFromParent();
+    this.yardLabels.clear();
+    this.yardOf.clear();
     if (!started && project) {
       // Title-screen backdrop: the prop sits where it will be.
       for (const s of project.props) this.sim.spawnItem(s);
     }
     this.view = new WorldView(this.sim);
     this.r.scene.add(this.view.root);
+    // The kid faces the way the world (or the project) says, until they look around themselves.
+    this.yaw = this.sim.yaw;
+    this.pitch = 0;
+    this.nudge = null;
     this.env.gate.rotation.y = 0;
     this.gateAnim = 0;
     this.running = false;
@@ -182,6 +199,7 @@ export class Game {
       onTest: (bp: Blueprint) => this.startTest(bp),
       onStopTest: () => this.stopTest(),
       onChange: () => this.persistSoon(),
+      testPower: () => (this.testMachine !== null ? this.sim.machines.get(this.testMachine)?.powerSummary() ?? null : null),
       creations: () => this.save.creations,
       ideas: () => ideasFor(this.sandbox ? null : this.projectId),
       onBench: (d: string) => (this.stash.get(d) ?? 0) + this.build.bp.parts.filter((p) => p.def === d).length,
@@ -279,6 +297,7 @@ export class Game {
       h('h2', {}, '📓 Lab Notebook'),
       h('p', {}, `Junk discovered: ${found}/${total}`),
       h('p', {}, `Bonus stars: ${tb.earned}/${tb.possible}`),
+      ...(s.yard.length ? [h('p', {}, `Machines parked in the yard: ${s.yard.length}`)] : []),
       ...stages,
       h('div', { class: 'row' }, btn('Back', back)),
     ]);
@@ -348,6 +367,7 @@ export class Game {
     this.stash.clear();
     this.bench = newBlueprint();
     if (keep) this.restoreSession(keep);
+    this.populateYard();
     this.persist();
     this.beginIntro(p);
   }
@@ -368,6 +388,7 @@ export class Game {
     this.bench = newBlueprint();
     const s = this.save.session;
     if (s?.mode === 'sandbox') this.restoreSession(s);
+    this.populateYard();
     // Something to play with.
     this.sim.spawnItem({ part: 'playground_ball', pos: [4, 0.2, 0] });
     this.enterExplore();
@@ -392,9 +413,50 @@ export class Game {
     }
   }
 
+  /**
+   * The yard remembers: machines that solved earlier projects sit where they did it, under
+   * a tape label, and every solved project has left one new piece of junk lying around.
+   */
+  private populateYard() {
+    let slot = 0;
+    for (const y of this.save.yard) {
+      if (this.projectId && y.project === this.projectId) continue; // solving it again: a clean slate for this one
+      // Lined up along the fences rather than left where they worked: a vac parked in the fence
+      // gap would block the very route the next project needs.
+      const spot = WORLD.parking[slot++ % WORLD.parking.length];
+      const bp = clone(y.bp);
+      const m = this.sim.addMachine(bp, groundedPlacement(bp, spot.pos[0], 0, spot.pos[1], spot.yaw));
+      m.parked = true;
+      this.yardOf.set(m.id, y);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(y.name, '#f2d27a', '#2f2418', 256, 64), depthTest: false, transparent: true }));
+      sprite.scale.set(0.9, 0.225, 1);
+      sprite.renderOrder = 3;
+      this.r.scene.add(sprite);
+      this.yardLabels.set(m.id, sprite);
+    }
+    for (const spawn of rewardSpawns(this.save)) {
+      if (this.sandbox) continue; // the sandbox shelf already has everything found
+      this.sim.spawnItem(spawn);
+    }
+  }
+
+  private updateYardLabels() {
+    for (const [id, sprite] of this.yardLabels) {
+      const m = this.sim.machines.get(id);
+      if (!m) {
+        sprite.removeFromParent();
+        this.yardLabels.delete(id);
+        continue;
+      }
+      const c = m.center();
+      const b = blueprintBounds(m.bp);
+      sprite.position.set(c.x, c.y + (b.max.y - b.min.y) / 2 + 0.35, c.z);
+    }
+  }
+
   private sessionData(): SaveData['session'] {
     if (this.mode === 'title' && !this.projectId && !this.sandbox) return this.save.session;
-    const machines = [...this.sim.machines.values()].filter((m) => m.id !== this.testMachine).map((m) => ({ bp: m.bp, placement: m.placement }));
+    const machines = [...this.sim.machines.values()].filter((m) => m.id !== this.testMachine && !this.yardOf.has(m.id)).map((m) => ({ bp: m.bp, placement: m.placement }));
     if (this.carrying) machines.push({ bp: this.carrying.bp, placement: { pos: [BENCH_ORIGIN.x + 2, 0, BENCH_ORIGIN.z], yaw: 0 } });
     return {
       mode: this.sandbox ? 'sandbox' : 'project',
@@ -423,17 +485,23 @@ export class Game {
     this.setHudVisible(false);
     this.input.unlockPointer();
     const f = new THREE.Vector3(...p.focus);
-    if (p.intro === 'ballOverFence') {
-      const ball = this.sim.itemByTag('target')!;
-      this.introBall = { from: new THREE.Vector3(10.2, 0.2, 4.4), to: toV(ball.rb.translation()) };
-      ball.rb.setTranslation({ x: 10.2, y: 0.2, z: 4.4 }, true);
-      this.cam.intro.p.set(7.5, 1.3, 1.2);
-      this.cam.intro.look.set(11.5, 1.2, 4.6);
+    if (p.introCam) {
+      this.cam.intro.p.set(...p.introCam.pos);
+      this.cam.intro.look.set(...p.introCam.look);
     } else {
-      this.introBall = null;
       const dir = new THREE.Vector3(-1, 0, -1).normalize();
       this.cam.intro.p.copy(f).addScaledVector(dir, 5).setY(Math.max(1.3, f.y * 0.6));
       this.cam.intro.look.copy(f);
+    }
+    this.introBall = null;
+    if (p.intro === 'ballOverFence') {
+      const ball = this.sim.itemByTag('target')!;
+      const from = new THREE.Vector3(...BALL_INTRO.from);
+      const to = toV(ball.rb.translation());
+      const dist = from.distanceTo(to);
+      // Longer throws go higher and take longer, so the arc always reads as one bounce.
+      this.introBall = { from, to, T: 0.9 + dist * 0.095, apex: 1.4 + dist * 0.31 };
+      ball.rb.setTranslation({ x: from.x, y: from.y, z: from.z }, true);
     }
     this.cam.set('intro', true);
   }
@@ -441,31 +509,35 @@ export class Game {
   private updateIntro(dt: number) {
     this.introT += dt;
     const p = PROJECT_MAP[this.projectId!];
-    if (this.introBall) {
+    const ib = this.introBall;
+    if (ib) {
       const ball = this.sim.itemByTag('target')!;
       const T0 = 0.5;
-      const T = 1.5;
-      const u = (this.introT - T0) / T;
+      const u = (this.introT - T0) / ib.T;
       if (u < 0) {
-        ball.rb.setTranslation({ x: this.introBall.from.x, y: 0.2, z: this.introBall.from.z }, true);
+        ball.rb.setTranslation({ x: ib.from.x, y: 0.2, z: ib.from.z }, true);
         ball.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       } else if (u <= 1) {
-        const pos = this.introBall.from.clone().lerp(this.introBall.to, u);
-        pos.y = THREE.MathUtils.lerp(this.introBall.from.y, this.introBall.to.y + 0.3, u) + Math.sin(u * Math.PI) * 3.4;
+        const pos = ib.from.clone().lerp(ib.to, u);
+        pos.y = THREE.MathUtils.lerp(ib.from.y, ib.to.y + 0.3, u) + Math.sin(u * Math.PI) * ib.apex;
         ball.rb.setTranslation(pos, true);
         ball.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
         ball.rb.setAngvel({ x: 0, y: 0, z: -12 }, true);
         if (this.introT - dt < T0) {
           this.audio.impact('rubber', 'rubber', 3, pos);
-          this.fx.emit('dust', this.introBall.from, 8);
+          this.fx.emit('dust', ib.from, 8);
         }
         this.cam.intro.look.lerp(pos, 1 - Math.exp(-dt * 5));
-      } else if (this.introBall) {
-        ball.rb.setLinvel({ x: 0.6, y: -1, z: 0.2 }, true);
+      } else {
+        const [kx, ky, kz] = BALL_INTRO.kick;
+        ball.rb.setLinvel({ x: kx, y: ky, z: kz }, true);
+        // The spin during the arc is for show; left on, it would roll the ball on out of reach.
+        ball.rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
         this.introBall = null;
       }
     }
-    if (this.introT > (p.intro ? 2.6 : 1.6) && !this.modal.open) this.showBrief(p);
+    const introLen = p.intro === 'ballOverFence' ? 0.5 + (0.9 + new THREE.Vector3(...BALL_INTRO.from).distanceTo(new THREE.Vector3(...p.props[0].pos)) * 0.095) + 0.6 : 1.6;
+    if (this.introT > introLen && !this.modal.open) this.showBrief(p);
   }
 
   private showBrief(p: ProjectDef) {
@@ -488,15 +560,28 @@ export class Game {
       const ball = this.sim.itemByTag('target');
       ball?.rb.setTranslation(this.introBall.to, true);
       ball?.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      ball?.rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
       this.introBall = null;
     }
     this.sim.objectivesPaused = false;
     this.audio.unlock();
     this.enterExplore();
     if (this.save.settings.hints && this.projectId === 'ball_over_fence' && !this.save.completed.ball_over_fence) {
-      setTimeout(() => this.thought.say('Hmm. The gate is locked. How do I get it back?', 4500), 900);
+      setTimeout(() => this.thought.say('Hmm. The gate is locked. How do I get it back?', 4000), 900);
       setTimeout(() => this.input.touchMode && this.stickHint.classList.remove('hidden'), 100);
       setTimeout(() => this.stickHint.classList.add('hidden'), 9000);
+      // First time only: a glance over the shoulder at the garage, so the lab is not a secret.
+      if (!this.save.seen.includes('lab_nudge')) {
+        if (this.nudgeTimer !== null) clearTimeout(this.nudgeTimer);
+        this.nudgeTimer = window.setTimeout(() => {
+          this.nudgeTimer = null;
+          if (this.mode !== 'explore' || this.modal.open || this.save.seen.includes('lab_nudge')) return;
+          markSeen(this.save, 'lab_nudge');
+          this.persistSoon();
+          this.thought.say('All the good junk ends up in the garage lab. Over there.', 4500);
+          this.nudgeLookAt(new THREE.Vector3(BENCH_ORIGIN.x + 1.5, 1.2, BENCH_ORIGIN.z));
+        }, 5200);
+      }
     }
   }
 
@@ -519,6 +604,7 @@ export class Game {
     if (fp && !this.modal.open) {
       if (this.cam.mode === 'eyes' || this.cam.mode === 'chase' || this.cam.mode === 'wide') {
         if (this.cam.mode === 'eyes') {
+          if (dx || dy) this.nudge = null;
           this.yaw -= dx;
           this.pitch = THREE.MathUtils.clamp(this.pitch - dy, -1.35, 1.35);
         }
@@ -537,8 +623,12 @@ export class Game {
         inp.jump = this.input.jump;
       }
     }
-    inp.yaw = this.yaw;
-    inp.pitch = this.pitch;
+    // Only steer the kid's head while the player is behind their eyes; intros, menus and the
+    // bench leave the sim's own facing alone (that is how the spawn yaw survives the intro).
+    if (fp) {
+      inp.yaw = this.yaw;
+      inp.pitch = this.pitch;
+    }
     inp.rc.action = this.actionEdge;
     this.actionEdge = false;
     this.lastThrottle = inp.rc.throttle;
@@ -551,13 +641,48 @@ export class Game {
     return false;
   }
 
+  private anySwitch(): boolean {
+    for (const m of this.sim.machines.values()) if (m.state === 'running' && m.hasSwitch()) return true;
+    return false;
+  }
+
   private frozenMachines(): MachineInstance[] {
-    return [...this.sim.machines.values()].filter((m) => m.state === 'frozen' && m.id !== this.testMachine);
+    return [...this.sim.machines.values()].filter((m) => m.state === 'frozen' && !m.parked && m.id !== this.testMachine);
   }
 
   private nearBench(): boolean {
+    return nearBench(toV(this.sim.player!.translation()));
+  }
+
+  /** Looking at the bench, or at junk lying on it: the lab is what the kid means. */
+  private atBench(): boolean {
+    const look = this.lookTarget();
     const p = toV(this.sim.player!.translation());
-    return Math.hypot(p.x - BENCH_ORIGIN.x, p.z - BENCH_ORIGIN.z) < 2.3;
+    if (!look) return false;
+    if (look.kind === 'item') return benchTargeted(p, { kind: 'item', point: toV(look.item.rb.translation()) });
+    if (look.kind === 'static') return benchTargeted(p, { kind: 'static', id: look.id, point: look.point });
+    return false;
+  }
+
+  /** Turn the head smoothly toward a world point, once, unless the player looks around first. */
+  private nudgeLookAt(target: THREE.Vector3, dur = 1.6) {
+    const eye = this.sim.eye();
+    const to = Math.atan2(-(target.x - eye.x), -(target.z - eye.z));
+    let delta = to - this.yaw;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    this.nudge = { from: this.yaw, to: this.yaw + delta, t: 0, dur };
+  }
+
+  private updateNudge(dt: number) {
+    const n = this.nudge;
+    if (!n || this.mode !== 'explore' || this.modal.open) return;
+    n.t = Math.min(n.dur, n.t + dt);
+    const u = n.t / n.dur;
+    const e = u * u * (3 - 2 * u);
+    this.yaw = n.from + (n.to - n.from) * e;
+    this.pitch *= 1 - Math.min(1, dt * 3);
+    if (n.t >= n.dur) this.nudge = null;
   }
 
   private nearGateFromOutside(): boolean {
@@ -578,15 +703,20 @@ export class Game {
       if (touch) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
       return a;
     }
+    const atBench = !this.running && this.atBench();
     if (sim.carried) {
+      // Carrying a part up to the bench: it goes on the shelf and the lab opens.
+      if (atBench && sim.carried.item.def.buildable && !sim.carried.item.tag && !this.sandbox) a.push({ id: 'build', label: `🔧 ONTO THE SHELF${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
       a.push({ id: 'throw', label: `🤾 THROW${k('F')}`, onPress: () => this.throwItem() });
-      a.push({ id: 'drop', label: `✋ DROP${k('Q')}`, cls: 'primary', onPress: () => this.dropItem() });
+      a.push({ id: 'drop', label: `✋ DROP${k('Q')}`, cls: atBench ? '' : 'primary', onPress: () => this.dropItem() });
+    } else if (atBench) {
+      // The bench wins over the junk lying on it; that junk can still be picked up as a second choice.
+      a.push({ id: 'build', label: `🔧 BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
+      if (look?.kind === 'item') a.push({ id: 'pick', label: `✊ PICK UP${k('F')}`, onPress: () => this.pickUp(look.item) });
     } else if (look?.kind === 'item') {
       a.push({ id: 'pick', label: `✊ PICK UP${k('E')}`, cls: 'primary', onPress: () => this.pickUp(look.item) });
     } else if (look?.kind === 'machine' && look.machine.state === 'frozen' && look.machine.id !== this.testMachine) {
       a.push({ id: 'pickm', label: `✊ PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
-    } else if (this.nearBench()) {
-      a.push({ id: 'build', label: `🔧 BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
     } else if (this.nearGateFromOutside()) {
       a.push({ id: 'gate', label: `🔓 OPEN GATE${k('E')}`, cls: 'primary', onPress: () => this.openGate() });
     }
@@ -604,7 +734,8 @@ export class Game {
       a.push({ id: 'cam', label: `${camLabel}${k('C')}`, onPress: () => this.cycleCamera() });
       if (this.anyReceiver()) {
         a.push({ id: 'drive', label: this.driving ? `🎮 DRIVING${k('Tab')}` : `🚶 WALKING${k('Tab')}`, onPress: () => this.toggleDrive() });
-        a.push({ id: 'act', label: `⚡ SWITCH${k('X')}`, onPress: () => this.pressAction() });
+        // Only offer the switch when the remote actually has something to switch (a fan, vac or winch).
+        if (this.anySwitch()) a.push({ id: 'act', label: `⚡ SWITCH${k('X')}`, onPress: () => this.pressAction() });
       }
     } else if (this.frozenMachines().length && this.mode === 'explore') {
       a.push({ id: 'go', label: `▶ GO${k('G')}`, cls: 'go', onPress: () => this.go() });
@@ -700,10 +831,11 @@ export class Game {
     this.setHudVisible(false);
     this.thought.hide();
     document.body.classList.add('building');
-    this.build.enter(this.bench);
-    // First time in the lab on a project with an idea: offer it.
-    if (!this.sandbox && this.projectId && !this.save.completed[this.projectId] && !this.bench.parts.length && !this.ideaOffered.has(this.projectId) && ideasFor(this.projectId).length) {
-      this.ideaOffered.add(this.projectId);
+    // First time in the lab on a project with an idea: offer it (and skip the "drag something" thought, which would sit on top of it).
+    const offerIdea = !this.sandbox && !!this.projectId && !this.save.completed[this.projectId] && !this.bench.parts.length && !this.ideaOffered.has(this.projectId) && ideasFor(this.projectId).length > 0;
+    this.build.enter(this.bench, { quiet: offerIdea });
+    if (offerIdea) {
+      this.ideaOffered.add(this.projectId!);
       setTimeout(() => this.mode === 'build' && this.build.showIdea(true), 500);
     }
   }
@@ -728,7 +860,8 @@ export class Game {
   }
 
   private startTest(bp: Blueprint) {
-    const m = this.sim.addMachine(clone(bp), { pos: [BENCH_ORIGIN.x, BENCH_ORIGIN.y + 0.002, BENCH_ORIGIN.z], yaw: 0 });
+    // Same grounding as placing it in the yard: the lowest point rests on the bench top.
+    const m = this.sim.addMachine(clone(bp), benchTestPlacement(bp, WORLD.workbench));
     this.testMachine = m.id;
     m.go();
     this.audio.play('go');
@@ -744,6 +877,7 @@ export class Game {
 
   private startCarry(bp: Blueprint) {
     const view = new BlueprintView(bp);
+    view.group.add(forwardArrow(blueprintBounds(bp)));
     this.r.scene.add(view.group);
     this.carrying = { bp, view, rot: 0, placement: null, valid: false };
     this.mode = 'carry';
@@ -775,15 +909,29 @@ export class Game {
       return !t || t.owner.kind === 'static';
     });
     const groundY = down ? down.point.y : 0;
-    const yaw = this.yaw + c.rot;
-    // Centre the machine's footprint on the target point.
-    const mid = b.min.clone().add(b.max).multiplyScalar(0.5).setY(0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-    const pos: [number, number, number] = [target.x - mid.x, groundY - b.min.y + 0.01, target.z - mid.z];
-    c.placement = { pos, yaw };
-    c.valid = this.machineFits(c.bp, c.placement) && Math.hypot(target.x - eye.x, target.z - eye.z) > 0.5;
-    c.view.group.position.set(...pos);
-    c.view.group.rotation.set(0, yaw, 0);
+    // The machine faces the way the kid is looking (plus any manual turns), footprint centred on the aim point.
+    c.placement = groundedPlacement(c.bp, target.x, groundY, target.z, facingYaw(this.yaw, c.rot));
+    c.valid = this.machineFits(c.bp, c.placement) && Math.hypot(target.x - eye.x, target.z - eye.z) > 0.5 && this.canReach(c.bp, c.placement);
+    c.view.group.position.set(...c.placement.pos);
+    c.view.group.rotation.set(0, c.placement.yaw, 0);
     c.view.setGhost(c.valid ? null : 0xff4030);
+  }
+
+  /**
+   * Could the kid actually set it down there? Every corner of its footprint has to be
+   * reachable from where they stand without a wall or fence in between (no posting
+   * a machine through the gap under the fence, and no nozzle poking into next door).
+   */
+  private canReach(bp: Blueprint, pl: MachinePlacement): boolean {
+    const eye = this.sim.eye();
+    const b = blueprintBounds(bp);
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.yaw);
+    for (const [cx, cz] of [[b.min.x, b.min.z], [b.max.x, b.min.z], [b.min.x, b.max.z], [b.max.x, b.max.z]]) {
+      const corner = new THREE.Vector3(cx, 0, cz).applyQuaternion(q).add(new THREE.Vector3(...pl.pos));
+      corner.y = pl.pos[1] + 0.45;
+      if (this.sim.physics.blockedByStatic(eye, corner)) return false;
+    }
+    return true;
   }
 
   /** Does the machine overlap walls, fences, trees...? */
@@ -815,7 +963,7 @@ export class Game {
       }
     }
     void obbBounds;
-    return true;
+    return !this.sim.overlapsMachine(bp, pl);
   }
 
   private placeCarried() {
@@ -851,6 +999,17 @@ export class Game {
       return;
     }
     const mass = blueprintMass(m.bp);
+    const entry = this.yardOf.get(m.id);
+    if (entry) {
+      // Taking a parked machine back into service: it is the player's again, not the yard's.
+      this.yardOf.delete(m.id);
+      this.yardLabels.get(m.id)?.removeFromParent();
+      this.yardLabels.delete(m.id);
+      const i = this.save.yard.indexOf(entry);
+      if (i >= 0) this.save.yard.splice(i, 1);
+      this.persist();
+      this.thought.say(`The ${m.bp.name}. Still works, probably.`, 2500);
+    }
     this.sim.removeMachine(m.id);
     this.startCarry(m.bp);
     if (mass > 30) this.thought.say(`Oof. ${mass.toFixed(0)} kg. This is heavy.`, 2500);
@@ -870,6 +1029,11 @@ export class Game {
     this.thought.hide();
     this.driving = true;
     this.input.unlockPointer();
+    // The first time a remote-controlled machine starts, say how to drive it. Once.
+    if (this.anyReceiver() && markSeen(this.save, 'drive_hint')) {
+      this.thought.say(this.input.touchMode ? 'Left stick drives it. Tap WALKING to hop out.' : 'WASD drives it. Tab hops out.', 6000);
+      this.persistSoon();
+    }
     // Watch it work: pull back behind the kid's shoulder and orbit the action.
     if (this.anyReceiver()) this.cam.set('chase', false, 1.0);
     else {
@@ -1033,6 +1197,11 @@ export class Game {
         break;
       case 'brownout':
         A.play('brownout', e.pos);
+        // The first brownout on the first project is the game's one big hint: there is a bigger battery somewhere.
+        if (this.save.settings.hints && this.projectId === 'ball_over_fence' && !this.succeeded && markSeen(this.save, 'brownout_hint')) {
+          setTimeout(() => this.mode === 'explore' && this.thought.say("That little battery can't feed a shop vac. Dad's old car battery could. It's round the back of the shed... and it is SO heavy.", 7000), 1200);
+          this.persistSoon();
+        }
         break;
       case 'batteryDead':
         A.play('brownout', e.pos, 0.5);
@@ -1047,13 +1216,27 @@ export class Game {
         A.play('land', e.pos, Math.min(1, e.speed / 6));
         if (e.speed > 4) this.fx.emit('dust', e.pos, 8);
         break;
+      case 'climb':
+        A.play('step', undefined, 0.6);
+        break;
+      case 'bark':
+        A.play('bark', e.pos, 0.8);
+        break;
       case 'pickup': {
         A.play('pickup', e.pos);
+        const story = this.sim.carried?.item.spawn.story;
+        if (story && markSeen(this.save, `story:${e.part}`)) {
+          setTimeout(() => this.thought.say(story, 5000), 400);
+          this.persistSoon();
+        }
         if (discover(this.save, e.part)) {
           const d = getPart(e.part);
           this.toasts.show(`✨ Found: <b>${d.name}</b> — ${d.traits.join(', ')}`, 'new', 3200);
           A.play('discover');
           this.persistSoon();
+          if (e.part === 'battery_car' && this.save.settings.hints && this.save.seen.includes('brownout_hint') && !this.save.completed.ball_over_fence) {
+            this.thought.say('Oof. Okay. Swap this in for the little one and try again.', 4500);
+          }
         }
         break;
       }
@@ -1071,6 +1254,9 @@ export class Game {
     this.succeeded = true;
     const p = PROJECT_MAP[this.projectId];
     const unlocked = completeProject(this.save, this.projectId, time, bonuses.filter((b) => b.earned).map((b) => b.def.id));
+    // Whatever was running when it worked stays in the yard as a keepsake.
+    const solvers = [...this.sim.machines.values()].filter((m) => m.state === 'running' && m.id !== this.testMachine).map((m) => ({ name: m.bp.name, bp: clone(m.bp), placement: m.placement }));
+    rememberSolvers(this.save, solvers, this.projectId);
     this.save.session = null;
     writeSave(this.save);
     this.audio.play('success');
@@ -1122,6 +1308,7 @@ export class Game {
         break;
       case 'f':
         if (this.sim.carried) this.throwItem();
+        else this.exploreActions().find((a) => a.id === 'pick')?.onPress();
         break;
       case 'g':
         if (!this.running && this.mode === 'explore') this.go();
@@ -1169,10 +1356,12 @@ export class Game {
       this.replay.record(this.view, dt);
     }
     if (this.mode === 'intro') this.updateIntro(dt);
+    if (this.nudge) this.updateNudge(dt);
     if (this.mode === 'carry') this.updateCarry();
     if (this.mode === 'build') this.build.update(dt);
     if (this.mode === 'title') this.cam.orbit.yaw = 0.35 + Math.sin(this.time * 0.06) * 0.35;
     this.updateGate(dt);
+    this.updateYardLabels();
     this.updateHud();
     this.updateAudio(dt);
     this.updateEffects(dt);
@@ -1191,7 +1380,6 @@ export class Game {
     this.acc += dt;
     let steps = 0;
     const inp = this.buildInput(dt);
-    this.sim.yaw = this.yaw;
     while (this.acc >= 1 / 120 && steps < 6) {
       this.sim.step(inp);
       inp.rc.action = false;

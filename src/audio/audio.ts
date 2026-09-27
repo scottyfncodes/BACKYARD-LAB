@@ -229,6 +229,13 @@ export class Audio {
         this.tone(d, t, 784, 0.12, 0.2, 'triangle');
         this.tone(d, t + 0.1, 1175, 0.25, 0.2, 'triangle');
         break;
+      case 'bark':
+        // Two short yaps: a buzzy rasp with a pitch drop.
+        this.tone(d, t, 420, 0.09, 0.35, 'sawtooth', 260);
+        this.noiseBurst(d, t, 0.07, 1400, 1.5, 0.25);
+        this.tone(d, t + 0.16, 470, 0.1, 0.3, 'sawtooth', 280);
+        this.noiseBurst(d, t + 0.16, 0.07, 1400, 1.5, 0.22);
+        break;
       case 'gate':
         this.tone(d, t, 300, 0.5, 0.3, 'sawtooth', 250);
         this.noiseBurst(d, t, 0.3, 900, 3, 0.4);

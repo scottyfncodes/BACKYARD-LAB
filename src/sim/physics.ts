@@ -42,7 +42,8 @@ export type Owner =
   | { kind: 'static'; id?: string }
   | { kind: 'item'; id: number }
   | { kind: 'machine'; id: number }
-  | { kind: 'player' };
+  | { kind: 'player' }
+  | { kind: 'dog' };
 
 export interface ColliderTag {
   owner: Owner;

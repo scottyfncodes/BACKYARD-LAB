@@ -295,7 +295,7 @@ export const PARTS: PartDef[] = [
   {
     id: 'battery_small',
     name: 'Lantern Battery',
-    hint: 'Light. Enough juice for a motor or two.',
+    hint: 'Light. Enough juice for a motor or two, for a few minutes.',
     traits: ['power', 'light', 'small capacity'],
     material: 'plastic',
     mass: 0.9,
@@ -305,7 +305,7 @@ export const PARTS: PartDef[] = [
       { id: 'side', label: 'side', pos: [0, 0, -0.055], normal: [0, 0, -1], up: [0, 1, 0] },
     ],
     strength: 600,
-    behaviors: [{ type: 'battery', energy: 18000, maxWatts: 260 }],
+    behaviors: [{ type: 'battery', energy: 32000, maxWatts: 260 }],
     visual: 'battery_small',
     buildable: true,
     stage: 1,

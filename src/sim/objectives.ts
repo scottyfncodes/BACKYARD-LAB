@@ -69,6 +69,8 @@ export class ObjectiveTracker {
   done = false;
   private hold = 0;
   lost = new Set<string>();
+  /** 'ever' bonuses whose condition has been seen true at some point. */
+  seen = new Set<string>();
   constructor(public project: ProjectDef) {}
 
   update(q: WorldQuery, dt: number): ObjectiveEvent[] {
@@ -79,6 +81,7 @@ export class ObjectiveTracker {
         this.lost.add(b.id);
         out.push({ type: 'bonusLost', def: b });
       }
+      if (b.kind === 'ever' && !this.seen.has(b.id) && evalCond(b.cond, q)) this.seen.add(b.id);
     }
     for (const f of this.project.fails) {
       if (evalCond(f.cond, q)) out.push({ type: 'fail', message: f.message, action: f.action });
@@ -89,7 +92,7 @@ export class ObjectiveTracker {
         this.done = true;
         const bonuses = this.project.bonuses.map((def) => ({
           def,
-          earned: def.kind === 'never' ? !this.lost.has(def.id) : evalCond(def.cond, q),
+          earned: def.kind === 'never' ? !this.lost.has(def.id) : def.kind === 'ever' ? this.seen.has(def.id) || evalCond(def.cond, q) : evalCond(def.cond, q),
         }));
         out.push({ type: 'success', bonuses, time: q.time });
       }

@@ -38,6 +38,24 @@ export interface SpawnDef {
   tag?: string;
   /** Tied down to a fixed point (untied when picked up). */
   tie?: V3;
+  /** The kid's one line about it, the first time they pick it up. */
+  story?: string;
+}
+
+/** Somewhere the kid can climb: stand in the box and push along `up` (horizontal, into the rungs). */
+export interface LadderDef {
+  id: string;
+  min: V3;
+  max: V3;
+  up: V3;
+  /** Height of whatever it leads onto. */
+  top: number;
+}
+
+/** A spot where a solved machine gets parked: ground x/z and the machine yaw. */
+export interface ParkingDef {
+  pos: [number, number];
+  yaw: number;
 }
 
 export const FENCE_H = 2.1;
@@ -62,10 +80,29 @@ const fenceZ = (z: number, x0: number, x1: number, h = FENCE_H, vis = 'fence'): 
 
 export const WORLD = {
   bounds: { min: [-22, -6, -22] as V3, max: [36, 60, 24] as V3 },
-  playerSpawn: { pos: [-1.5, 0, -6.2] as V3, yaw: 200 },
+  /** Off the deck, facing the yard and the east fence (yaw 0 faces the house; 235 looks at the fence gap). */
+  playerSpawn: { pos: [-1.5, 0, -6.2] as V3, yaw: 235 },
   workbench: { pos: [-11, 0, -5] as V3, top: 0.78, half: [0.75, 0.4] as [number, number] },
+  /** The treehouse ladder: up the open south side of the platform. */
+  ladders: [{ id: 'treehouse', min: [5.55, -0.1, 7.15], max: [6.45, 3.1, 7.95], up: [0, 0, -1], top: 2.86 }] as LadderDef[],
+  /**
+   * Where solved machines get parked: a line-up along the west fence, then along the north fence
+   * past the deck. Out of the way of every route a project needs (the gap, the tree, the shed),
+   * each one facing the yard. Machine forward is +Z for yaw 0, so π/2 faces east.
+   */
+  parking: [
+    { pos: [-12.8, 0.9], yaw: Math.PI / 2 },
+    { pos: [-12.8, 2.5], yaw: Math.PI / 2 },
+    { pos: [-12.8, 4.1], yaw: Math.PI / 2 },
+    { pos: [-12.8, 5.7], yaw: Math.PI / 2 },
+    { pos: [-12.8, 7.3], yaw: Math.PI / 2 },
+    { pos: [9.3, -8.6], yaw: 0 },
+    { pos: [11.0, -8.6], yaw: 0 },
+    { pos: [12.7, -8.6], yaw: 0 },
+  ] as ParkingDef[],
   zones: [
-    { id: 'home_yard', min: [-14, -1, -10], max: [15, 30, 14] },
+    // "Home" reaches to the far face of the fence: something wedged in the gap under it is on our side.
+    { id: 'home_yard', min: [-14, -1, -10], max: [15.1, 30, 14] },
     { id: 'neighbor_yard', min: [15, -1, -10], max: [28, 30, 14] },
     { id: 'lab', min: [-14, -1, -9], max: [-8, 4, -1] },
     { id: 'under_shed', min: [-12.1, -1, 8.9], max: [-7.9, 0.14, 13.1] },
@@ -135,7 +172,6 @@ export const WORLD = {
     { part: 'timer', pos: [-13.7, 0.97, -6.2] },
     { part: 'winch', pos: [-13.6, 0.1, -7.6], rotY: 90 },
     { part: 'vacuum', pos: [-13.4, 0.2, -2.0] },
-    { part: 'battery_car', pos: [-12.8, 0.12, -8.3] },
     { part: 'broom', pos: [-9.2, 0.05, -8.4], rot: [0, 0, 0] },
     { part: 'plank', pos: [-9.5, 0.03, -2.2], rotY: 10 },
     // deck
@@ -159,7 +195,8 @@ export const WORLD = {
     { part: 'bucket', pos: [-5.9, 0.16, 1.7] },
     { part: 'spring', pos: [-6.2, 0.06, 4.2] },
     { part: 'spring', pos: [-6.0, 0.06, 4.4] },
-    // by the shed
+    // by the shed (and the heavy stuff Dad hides round the back of it)
+    { part: 'battery_car', pos: [-10, 0.12, 13.55], rotY: 90 },
     { part: 'bike_wheel', pos: [-7.6, 0.3, 10.2], rot: [0, 90, 0] },
     { part: 'bike_wheel', pos: [-7.6, 0.3, 10.8], rot: [0, 90, 0] },
     { part: 'rope', pos: [-7.7, 0.05, 12.2] },
@@ -183,8 +220,9 @@ export const LOOK_HINTS: Record<string, string> = {
   workbench: 'My lab bench. I can build stuff here.',
   fence_gap: 'Something dug under the fence here. There is a little gap at the bottom...',
   gate: 'Locked. The latch is on THEIR side.',
-  shed: 'The shed sits up on blocks. There is a skinny gap underneath.',
+  shed: 'The shed sits up on blocks. There is a skinny gap underneath. Dad keeps the heavy stuff round the back.',
   trunk: 'The big tree. The treehouse is up there.',
+  treehouse: 'The treehouse. The ladder is round the back.',
   house: 'Home. Mom said no building stuff inside.',
   garage_back: 'The lab. Everything useful ends up in here eventually.',
 };

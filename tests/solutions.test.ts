@@ -1,10 +1,11 @@
-import { Vector3 } from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT_MAP } from '../src/data/projects';
 import { Builder } from '../src/sim/blueprint';
 import { initPhysics, toV } from '../src/sim/physics';
 import { emptyInput, Simulation } from '../src/sim/simulation';
-import { place, rcCar, runUntil, steerTo, successOf } from './helpers';
+import { fetchBallHome, followIdea, place, runUntil, successOf } from './helpers';
+import { IDEAS } from '../src/data/ideas';
+import { facingYaw, groundedPlacement } from '../src/game/placement';
 
 beforeAll(async () => {
   await initPhysics();
@@ -15,33 +16,13 @@ beforeAll(async () => {
  * in the real backyard, judged only by where the ball ends up.
  */
 describe('THE BALL: different solutions all work', () => {
-  it('DRIVE: an RC car with duct tape goes under the fence gap and drags the ball home', () => {
+  it('DRIVE: the sticky RC car goes under the fence gap, sticks to the ball and brings it home', () => {
     const sim = new Simulation({ project: PROJECT_MAP.ball_over_fence });
-    const car = rcCar({ tape: true });
-    const m = place(sim, car.bp, 12.8, 4.8, Math.PI / 2);
+    const { bp, uids } = followIdea(IDEAS.find((i) => i.id === 'sticky_rc_car')!);
+    const m = sim.addMachine(bp, groundedPlacement(bp, 12.5, 0, 4.8, facingYaw(-Math.PI / 2)));
     sim.run(0.3);
     sim.goAll();
-    const ball = sim.itemByTag('target')!;
-    const waypoints = [new Vector3(16.3, 0, 4.8)];
-    let stage = 0;
-    const ok = runUntil(
-      sim,
-      40,
-      () => {
-        const bp = toV(ball.rb.translation());
-        const stuck = m.grabs.some((g) => g.other.handle === ball.rb.handle);
-        if (stage === 0 && toV(m.partWorldPose(car.receiver)!.p).x > 15.9) stage = 1;
-        if (stage === 1 && stuck) stage = 2;
-        if (stage === 2 && m.partWorldPose(car.receiver)!.p.x > 16.8) stage = 3;
-        if (stage === 0) return steerTo(m, car.receiver, waypoints[0]);
-        if (stage === 1) return steerTo(m, car.receiver, bp, 0.6);
-        // Swing wide, then line up with the gap and drive home.
-        if (stage === 2) return steerTo(m, car.receiver, new Vector3(17.6, 0, 4.8), 0.7);
-        const nose = m.partWorldPose(car.receiver)!.p;
-        return steerTo(m, car.receiver, nose.x > 15.8 ? new Vector3(15.6, 0, 4.8) : new Vector3(12, 0, 4.8), 0.7);
-      },
-      () => !!successOf(sim),
-    );
+    const ok = fetchBallHome(sim, m, uids[8], 60, 'push');
     expect(ok).toBe(true);
     const bonuses = successOf(sim)!.type === 'success' ? (successOf(sim) as any).bonuses : [];
     expect(bonuses.find((b: any) => b.def.id === 'hands_off').earned).toBe(true);
