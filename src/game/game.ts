@@ -13,7 +13,7 @@ import type { SimEvent } from '../sim/events';
 import { obbBounds, partOBBs } from '../sim/geom';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
 import { GROUP, groups, RAPIER, toV } from '../sim/physics';
-import { emptyInput, PLAYER, Simulation, type Item, type SimInput } from '../sim/simulation';
+import { emptyInput, PLAYER, Simulation, WAGON, type Item, type SimInput } from '../sim/simulation';
 import { ActionBar, btn, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
 import { BuildMode, type Stash } from './build';
 import { CameraDirector } from './camera';
@@ -25,7 +25,9 @@ import { completeProject, discover, loadSave, sandboxParts, totalBonuses, writeS
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
 const BENCH_ORIGIN = new THREE.Vector3(WORLD.workbench.pos[0], WORLD.workbench.top, WORLD.workbench.pos[2]);
-const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+/** How close the kid has to be to use the wagon (horizontal, body centre to wagon centre). */
+const WAGON_REACH = 2.6;
+const fmtTime =(t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 export class Game {
   r: Renderer;
@@ -67,6 +69,7 @@ export class Game {
   private lastLookKey = '';
   private absorbedOnce = new Set<number>();
   private ideaOffered = new Set<string>();
+  private wagonHinted = false;
 
   // UI
   ui: HTMLElement;
@@ -310,7 +313,7 @@ export class Game {
       h(
         'p',
         { class: 'muted' },
-        'Desktop: WASD move · mouse look · E use · Q drop · F throw · G go · R reset/rotate · C camera · Tab drive/walk · V replay · Space jump',
+        'Desktop: WASD move · mouse look · E use · Q drop · F throw · H pull wagon · B put in wagon · G go · R reset/rotate · C camera · Tab drive/walk · V replay · Space jump',
       ),
       h('p', { class: 'muted' }, 'Touch: left thumb moves (push far to run), right thumb looks. Buttons do the rest.'),
       h('div', { class: 'row' }, btn('Back', back)),
@@ -390,6 +393,17 @@ export class Game {
         if (it) this.sim.removeItem(it.id);
       }
     }
+    // Back in the wagon, taken from wherever they were lying.
+    const w = this.sim.wagon;
+    if (w) {
+      for (const d of s.wagon ?? []) {
+        const it = [...this.sim.items.values()].find((i) => i.def.id === d && !i.tag);
+        if (it) {
+          w.load.push(it.spawn);
+          this.sim.removeItem(it.id);
+        } else if (this.sandbox) w.load.push({ part: d, pos: WORLD.wagon.pos });
+      }
+    }
   }
 
   private sessionData(): SaveData['session'] {
@@ -402,6 +416,7 @@ export class Game {
       bench: this.bench.parts.length ? this.bench : null,
       machines,
       stash: Object.fromEntries(this.stash),
+      wagon: this.sim.wagon?.load.map((s) => s.part) ?? [],
     };
   }
 
@@ -578,11 +593,22 @@ export class Game {
       if (touch) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
       return a;
     }
+    const wagon = sim.wagon;
+    const wagonNear = !!wagon && sim.wagonDistance() < WAGON_REACH;
     if (sim.carried) {
+      const it = sim.carried.item;
+      if (wagonNear) a.push({ id: 'load', label: `🛒 IN WAGON${k('B')}`, cls: 'primary', onPress: () => this.loadWagon(it) });
       a.push({ id: 'throw', label: `🤾 THROW${k('F')}`, onPress: () => this.throwItem() });
-      a.push({ id: 'drop', label: `✋ DROP${k('Q')}`, cls: 'primary', onPress: () => this.dropItem() });
+      a.push({ id: 'drop', label: `✋ DROP${k('Q')}`, cls: wagonNear ? '' : 'primary', onPress: () => this.dropItem() });
     } else if (look?.kind === 'item') {
       a.push({ id: 'pick', label: `✊ PICK UP${k('E')}`, cls: 'primary', onPress: () => this.pickUp(look.item) });
+      if (wagonNear) a.push({ id: 'load', label: `🛒 TO WAGON${k('B')}`, onPress: () => this.loadWagon(look.item) });
+    } else if (look?.kind === 'wagon' && wagon) {
+      if (!wagon.hitched) a.push({ id: 'hitch', label: `🛒 PULL${k('H')}`, cls: 'primary', onPress: () => this.toggleHitch() });
+      if (wagon.load.length) {
+        a.push({ id: 'takeout', label: `✊ TAKE OUT${wagon.hitched ? k('E') : ''}`, cls: wagon.hitched ? 'primary' : '', onPress: () => this.takeFromWagon() });
+        a.push({ id: 'tip', label: '⤵ TIP OUT', onPress: () => this.tipWagon() });
+      }
     } else if (look?.kind === 'machine' && look.machine.state === 'frozen' && look.machine.id !== this.testMachine) {
       a.push({ id: 'pickm', label: `✊ PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
     } else if (this.nearBench()) {
@@ -590,6 +616,7 @@ export class Game {
     } else if (this.nearGateFromOutside()) {
       a.push({ id: 'gate', label: `🔓 OPEN GATE${k('E')}`, cls: 'primary', onPress: () => this.openGate() });
     }
+    if (wagon?.hitched) a.push({ id: 'unhitch', label: `✋ LET GO${k('H')}`, onPress: () => this.toggleHitch() });
     if (touch && !(this.running && this.driving && this.anyReceiver())) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
     return a;
   }
@@ -627,6 +654,11 @@ export class Game {
       key = `i${look.item.id}`;
       const heavy = d.mass > PLAYER.carryLimit ? ' (too heavy!)' : '';
       html = `<b>${d.name}${heavy}</b><span>${d.hint}</span><div class="traits">${d.traits.map((t) => `<span class="trait">${t}</span>`).join('')}<span class="trait">${d.mass < 1 ? `${Math.round(d.mass * 1000)} g` : `${d.mass} kg`}</span></div>`;
+    } else if (look?.kind === 'wagon' && this.sim.wagon) {
+      const load = this.sim.wagon.load;
+      key = `w${load.length}`;
+      const what = load.length ? load.map((s) => getPart(s.part).name).join(', ') : 'Empty. Load it up and haul it back to the lab.';
+      html = `<b>Wagon (${load.length}/${WAGON.capacity})</b><span>${what}</span><div class="traits"><span class="trait">${Math.round(this.sim.wagonLoadMass())}/${WAGON.maxLoad} kg</span></div>`;
     } else if (look?.kind === 'machine') {
       key = `m${look.machine.id}`;
       html = `<b>${look.machine.bp.name}</b><span>${blueprintMass(look.machine.bp).toFixed(1)} kg of pure genius</span>`;
@@ -638,7 +670,7 @@ export class Game {
       this.lastLookKey = key;
       this.prompt.innerHTML = html;
     }
-    this.reticle.classList.toggle('on', look?.kind === 'item' || look?.kind === 'machine');
+    this.reticle.classList.toggle('on', look?.kind === 'item' || look?.kind === 'machine' || look?.kind === 'wagon');
   }
 
   // ---- item actions
@@ -657,6 +689,57 @@ export class Game {
 
   private throwItem() {
     this.sim.drop(8.5);
+  }
+
+  // ---- wagon
+
+  private loadWagon(it: Item) {
+    const r = this.sim.loadWagon(it);
+    if (!r.ok) {
+      this.toasts.show(r.reason ?? "Can't", 'bad');
+      this.audio.play('error');
+    }
+  }
+
+  private takeFromWagon() {
+    const r = this.sim.takeFromWagon();
+    if (!r.ok) {
+      this.toasts.show(r.reason ?? "Can't", 'bad');
+      this.audio.play('error');
+    }
+  }
+
+  private tipWagon() {
+    this.sim.tipWagon();
+  }
+
+  private toggleHitch() {
+    const w = this.sim.wagon;
+    if (!w) return;
+    if (w.hitched) {
+      this.sim.hitchWagon(false);
+      return;
+    }
+    if (this.sim.wagonDistance() > WAGON_REACH) {
+      this.toasts.show('Too far from the wagon', 'bad');
+      return;
+    }
+    this.sim.hitchWagon(true);
+    if (this.save.settings.hints && !this.wagonHinted) {
+      this.wagonHinted = true;
+      this.thought.say('Now I can haul a whole load of junk back to the lab.', 3500);
+    }
+  }
+
+  /** Anything in the wagon parked by the bench goes on the lab shelf. */
+  private unloadWagon() {
+    if (this.sandbox || !this.sim.wagon?.load.length || this.sim.wagonDistance() > 4.5) return;
+    const load = this.sim.emptyWagon();
+    for (const s of load) {
+      this.stash.set(s.part, (this.stash.get(s.part) ?? 0) + 1);
+      discover(this.save, s.part);
+    }
+    this.toasts.show(`🛒 Unloaded ${load.length} part${load.length === 1 ? '' : 's'} from the wagon`, 'new', 2500);
   }
 
   private tapJump() {
@@ -693,6 +776,7 @@ export class Game {
       }
     }
     this.absorbLab();
+    this.unloadWagon();
     this.mode = 'build';
     this.input.unlockPointer();
     this.input.enabled = false;
@@ -1047,16 +1131,19 @@ export class Game {
         A.play('land', e.pos, Math.min(1, e.speed / 6));
         if (e.speed > 4) this.fx.emit('dust', e.pos, 8);
         break;
-      case 'pickup': {
+      case 'pickup':
         A.play('pickup', e.pos);
-        if (discover(this.save, e.part)) {
-          const d = getPart(e.part);
-          this.toasts.show(`✨ Found: <b>${d.name}</b> — ${d.traits.join(', ')}`, 'new', 3200);
-          A.play('discover');
-          this.persistSoon();
-        }
+        this.found(e.part);
         break;
-      }
+      case 'load':
+        A.play('drop', e.pos);
+        A.impact('metal', 'wood', 1.2, e.pos);
+        this.found(e.part);
+        this.persistSoon();
+        break;
+      case 'hitch':
+        A.play('click', e.pos);
+        break;
       case 'drop':
         A.play('drop', e.pos);
         break;
@@ -1064,6 +1151,14 @@ export class Game {
         A.play('throw', e.pos);
         break;
     }
+  }
+
+  private found(part: string) {
+    if (!discover(this.save, part)) return;
+    const d = getPart(part);
+    this.toasts.show(`✨ Found: <b>${d.name}</b> — ${d.traits.join(', ')}`, 'new', 3200);
+    this.audio.play('discover');
+    this.persistSoon();
   }
 
   private onSuccess(bonuses: { def: { id: string; label: string }; earned: boolean }[], time: number) {
@@ -1126,6 +1221,14 @@ export class Game {
       case 'g':
         if (!this.running && this.mode === 'explore') this.go();
         break;
+      case 'h':
+        this.toggleHitch();
+        break;
+      case 'b': {
+        const load = this.exploreActions().find((a) => a.id === 'load');
+        load?.onPress();
+        break;
+      }
       case 'r':
         if (this.mode === 'carry') this.rotateCarried();
         else if (this.running) this.resetRun();

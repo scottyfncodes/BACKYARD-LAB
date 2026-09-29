@@ -20,9 +20,12 @@ npm run dev        # http://localhost:5173
 | Move / look | WASD + mouse (click to capture) | Left thumb moves (push far to run), right thumb looks |
 | Use / pick up / build | `E` | Context button |
 | Drop / throw | `Q` / `F` | Buttons |
+| Wagon: pull / let go, put in | `H`, `B` | 🛒 PULL / ✋ LET GO, 🛒 IN WAGON |
 | Run machines / reset | `G` / `R` | ▶ GO / ⟲ RESET |
 | Camera, drive/walk, RC switch, replay | `C`, `Tab`, `X`, `V` | Buttons |
 | Workbench | Pick a part and hover where you want it: it auto-fits onto the nearest lock point in its most natural pose (wheels on axles, motors shaft-out). Click to place. `Q`/`E`/`Z`/`X`/`F` switch to fine tune (spin, tilt, mount side); arrows jump between lock points. Select a placed part and press `M` to move it. 💡 Idea walks you through a starter build | Tap a part in the tray to pick it up (swiping the tray just scrolls). Drag the ghost, or swipe a part straight up out of the tray, to where it should connect and let go: it clicks on in the most natural pose. Or tap a spot to move the ghost there, then tap the ghost or ✔ PLACE. One finger anywhere else turns the view. 🎯 Fine tune adds a d-pad, spin and tilt. Tap a placed part twice (or ✥ Move) to pick it back up. 💡 Idea gives a step-by-step build: each part waits on a gold ring, just tap ✔ PLACE |
+
+**The wagon** is parked outside the lab. Grab its handle and it rolls along behind you. Load junk into it (up to 8 parts, 60 kg) instead of carrying one thing at a time; hauling is much easier on the legs than lugging. Look at it to take the last thing out or tip the lot onto the ground. Walk to the bench with it and everything in it goes on the lab shelf.
 
 Add `?q=low` to the URL for low graphics (no shadows or grass).
 

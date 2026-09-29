@@ -45,8 +45,28 @@ export const PLAYER = {
   strength: 320, // N the kid can hold with
 };
 
+/** A little red pull-along wagon for hauling junk back to the lab. */
+export const WAGON = {
+  half: [0.28, 0.16, 0.46] as V3, // bed collider; local -Z is the handle end
+  mass: 9,
+  capacity: 8,
+  maxLoad: 60, // kg
+  tow: 1.3, // handle length: kid centre to wagon centre
+  maxSpeed: 7,
+};
+
+export interface Wagon {
+  rb: RigidBody;
+  collider: Collider;
+  /** What's riding in the bed (taken out of the world, respawnable). */
+  load: SpawnDef[];
+  hitched: boolean;
+}
+
 export interface SimOptions {
   player?: boolean;
+  /** Defaults to on whenever there is a player. */
+  wagon?: boolean;
   junk?: boolean;
   project?: ProjectDef | null;
   gateOpen?: boolean;
@@ -75,6 +95,7 @@ export class Simulation implements MachineHost {
   private jumpHeld = 0;
   private wasGrounded = false;
   carried: { item: Item; dist: number; rel: Quaternion; age: number } | null = null;
+  wagon: Wagon | null = null;
   gateOpen = false;
   /** Objectives only tick while the game says the project is live (not during intros). */
   objectivesPaused = false;
@@ -85,6 +106,7 @@ export class Simulation implements MachineHost {
     this.physics = new Physics();
     for (const s of WORLD.solids) this.physics.addSolid(s);
     if (opts.player !== false) this.createPlayer();
+    if (opts.wagon ?? opts.player !== false) this.createWagon();
     if (opts.junk !== false) for (const j of WORLD.junk) this.spawnItem(j);
     if (opts.project) this.startProject(opts.project);
     if (opts.gateOpen) this.openGate();
@@ -322,7 +344,9 @@ export class Simulation implements MachineHost {
     }
 
     const carriedMass = this.carried?.item.def.mass ?? 0;
-    const burden = Math.max(0.35, 1 - carriedMass / 40);
+    // Rolling a load is a lot easier than lugging it.
+    const towed = this.wagon?.hitched ? (WAGON.mass + this.wagonLoadMass()) * 0.2 : 0;
+    const burden = Math.max(0.35, 1 - (carriedMass + towed) / 40);
     const speed = (input.sprint ? PLAYER.run : PLAYER.walk) * burden;
     const fwd = new Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -380,12 +404,13 @@ export class Simulation implements MachineHost {
   // ---------------------------------------------------------------- carrying
 
   /** What the kid is looking at, within reach. */
-  lookTarget(maxDist = 2.3): { kind: 'item'; item: Item; point: Vector3 } | { kind: 'machine'; machine: MachineInstance; point: Vector3 } | { kind: 'static'; id?: string; point: Vector3; normal: Vector3 } | null {
+  lookTarget(maxDist = 2.3): { kind: 'item'; item: Item; point: Vector3 } | { kind: 'machine'; machine: MachineInstance; point: Vector3 } | { kind: 'wagon'; point: Vector3 } | { kind: 'static'; id?: string; point: Vector3; normal: Vector3 } | null {
     if (!this.player) return null;
     const hit = this.physics.raycast(this.eye(), this.look(), maxDist, undefined, this.player, (c) => !(this.carried && c.parent()?.handle === this.carried.item.rb.handle));
     if (!hit || !hit.tag) return null;
     const o = hit.tag.owner;
     if (o.kind === 'item') return { kind: 'item', item: this.items.get(o.id)!, point: hit.point };
+    if (o.kind === 'wagon') return { kind: 'wagon', point: hit.point };
     if (o.kind === 'machine') return { kind: 'machine', machine: this.machines.get(o.id)!, point: hit.point };
     if (o.kind === 'static') return { kind: 'static', id: o.id, point: hit.point, normal: hit.normal };
     return null;
@@ -454,6 +479,164 @@ export class Simulation implements MachineHost {
     rb.setAngvel({ x: w.x, y: w.y, z: w.z }, true);
   }
 
+  // ---------------------------------------------------------------- wagon
+
+  private createWagon() {
+    const s = WORLD.wagon;
+    const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), s.yaw * DEG);
+    const rb = this.physics.world.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(s.pos[0], s.pos[1] + 0.01, s.pos[2])
+        .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+        .lockRotations()
+        .setLinearDamping(1.5),
+    );
+    const [hx, hy, hz] = WAGON.half;
+    const cd = RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(0, hy, 0).setMass(WAGON.mass).setFriction(0.5).setRestitution(0.05).setCollisionGroups(G_DYNAMIC);
+    const collider = this.physics.world.createCollider(cd, rb);
+    this.physics.tags.set(collider.handle, { owner: { kind: 'wagon' }, mat: 'metal' });
+    this.bodyOwner.set(rb.handle, { kind: 'wagon' });
+    this.wagon = { rb, collider, load: [], hitched: false };
+  }
+
+  resetWagon() {
+    const w = this.wagon;
+    if (!w) return;
+    const s = WORLD.wagon;
+    const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), s.yaw * DEG);
+    w.hitched = false;
+    w.rb.setTranslation({ x: s.pos[0], y: s.pos[1] + 0.01, z: s.pos[2] }, true);
+    w.rb.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+    w.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  }
+
+  wagonLoadMass(): number {
+    return this.wagon ? this.wagon.load.reduce((m, s) => m + getPart(s.part).mass, 0) : 0;
+  }
+
+  /** Horizontal distance from the kid to the wagon. */
+  wagonDistance(): number {
+    if (!this.wagon || !this.player) return Infinity;
+    const a = this.player.translation();
+    const b = this.wagon.rb.translation();
+    return Math.hypot(a.x - b.x, a.z - b.z);
+  }
+
+  /** Why this item can't go in the wagon, or null if it can. */
+  wagonRefusal(it: Item): string | null {
+    const w = this.wagon;
+    if (!w) return 'No wagon here';
+    if (it.tag || !it.def.buildable) return `The ${it.def.name.toLowerCase()} stays out of the wagon`;
+    if (it.def.mass > PLAYER.carryLimit) return `Too heavy to lift in (${Math.round(it.def.mass)} kg)`;
+    if (it.snag && !it.snag.tie) return 'It is stuck up there';
+    if (w.load.length >= WAGON.capacity) return 'The wagon is full';
+    if (this.wagonLoadMass() + it.def.mass > WAGON.maxLoad) return 'The wagon would be too heavy';
+    return null;
+  }
+
+  loadWagon(it: Item): { ok: boolean; reason?: string } {
+    const reason = this.wagonRefusal(it);
+    if (reason) return { ok: false, reason };
+    it.touched = true;
+    this.wagon!.load.push(it.spawn);
+    const pos = toV(this.wagon!.rb.translation());
+    this.removeItem(it.id);
+    this.emit({ type: 'load', pos, part: it.def.id });
+    return { ok: true };
+  }
+
+  /** Empty the wagon without putting anything back in the world (unloading into the lab). */
+  emptyWagon(): SpawnDef[] {
+    if (!this.wagon) return [];
+    const load = this.wagon.load;
+    this.wagon.load = [];
+    return load;
+  }
+
+  /** Lift the last thing loaded out of the wagon and into the kid's hands. */
+  takeFromWagon(): { ok: boolean; reason?: string } {
+    const w = this.wagon;
+    if (!w || !w.load.length) return { ok: false, reason: 'The wagon is empty' };
+    if (this.carried) return { ok: false, reason: 'Hands full' };
+    const s = w.load.pop()!;
+    const p = toV(w.rb.translation());
+    const it = this.spawnFromWagon(s, [p.x, p.y + 0.6, p.z]);
+    return this.pickUp(it);
+  }
+
+  /** Tip everything out of the back of the wagon. */
+  tipWagon(): number {
+    const w = this.wagon;
+    if (!w) return 0;
+    const q = toQ(w.rb.rotation());
+    const back = new Vector3(0, 0, 1).applyQuaternion(q);
+    const side = new Vector3(1, 0, 0).applyQuaternion(q);
+    const p = toV(w.rb.translation()).addScaledVector(back, WAGON.half[2] + 0.45);
+    const load = this.emptyWagon();
+    load.forEach((s, i) => {
+      const at = p.clone().addScaledVector(side, ((i % 3) - 1) * 0.35).addScaledVector(back, Math.floor(i / 3) * 0.35);
+      const it = this.spawnFromWagon(s, [at.x, 0.25 + i * 0.12, at.z]);
+      it.rb.setLinvel({ x: back.x, y: 0.5, z: back.z }, true);
+    });
+    if (load.length) this.emit({ type: 'drop', pos: p, part: load[0].part });
+    return load.length;
+  }
+
+  private spawnFromWagon(s: SpawnDef, pos: V3): Item {
+    const it = this.spawnItem({ part: s.part, pos, rot: s.rot, rotY: s.rotY });
+    // Falling out of the world later still sends it home, not back to the wagon.
+    it.spawn = s;
+    it.touched = true;
+    return it;
+  }
+
+  hitchWagon(on: boolean) {
+    const w = this.wagon;
+    if (!w || w.hitched === on) return;
+    w.hitched = on;
+    if (on) w.rb.wakeUp();
+    this.emit({ type: 'hitch', pos: toV(w.rb.translation()), on });
+  }
+
+  private stepWagon() {
+    const w = this.wagon;
+    if (!w) return;
+    const rb = w.rb;
+    const p = toV(rb.translation());
+    if (outOfBounds(p)) {
+      this.resetWagon();
+      return;
+    }
+    if (!w.hitched || !this.player) return;
+    const kid = toV(this.player.translation());
+    const d = new Vector3(kid.x - p.x, 0, kid.z - p.z);
+    const len = d.length();
+    // Snagged on something, or the kid climbed away: the handle slips out of their hand.
+    if (len > WAGON.tow + 1.4 || kid.y - p.y > 2.2) {
+      this.hitchWagon(false);
+      return;
+    }
+    const dir = len > 1e-4 ? d.divideScalar(len) : new Vector3(0, 0, -1).applyQuaternion(toQ(rb.rotation()));
+    // Trail the kid at handle length (and roll back if they back into it).
+    const v = kid.clone().addScaledVector(dir, -WAGON.tow).sub(p).setY(0).multiplyScalar(10);
+    if (v.length() > WAGON.maxSpeed) v.setLength(WAGON.maxSpeed);
+    let vy = rb.linvel().y;
+    // Bump up over kerbs and the deck edge.
+    if (v.lengthSq() > 0.25) {
+      const fwd = v.clone().normalize();
+      const reach = WAGON.half[2] + 0.12;
+      const low = this.physics.raycast(p.clone().setY(p.y + 0.04), fwd, reach, groups(0xffff, GROUP.STATIC));
+      const high = this.physics.raycast(p.clone().setY(p.y + 0.34), fwd, reach, groups(0xffff, GROUP.STATIC));
+      if (low && !high && low.normal.y < 0.5) vy = Math.max(vy, 1.8);
+    }
+    rb.setLinvel({ x: v.x, y: vy, z: v.z }, true);
+    // Handle end points at the kid.
+    const want = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.atan2(-dir.x, -dir.z));
+    const cur = toQ(rb.rotation());
+    if (len > 0.5) cur.slerp(want, 0.08);
+    rb.setRotation({ x: cur.x, y: cur.y, z: cur.z, w: cur.w }, true);
+  }
+
   // ---------------------------------------------------------------- snags
 
   private stepSnags(dt: number) {
@@ -505,6 +688,7 @@ export class Simulation implements MachineHost {
 
   step(input: SimInput = emptyInput(), dt = DT) {
     this.stepPlayer(input, dt);
+    this.stepWagon();
     this.applyItemAero();
     this.stepCarry(dt);
     this.stepSnags(dt);

@@ -21,6 +21,8 @@ export interface SessionData {
   bench: Blueprint | null;
   machines: { bp: Blueprint; placement: MachinePlacement }[];
   stash: Record<string, number>;
+  /** Parts riding in the wagon. */
+  wagon?: string[];
 }
 
 export const SAVE_KEY = 'backyardlab.save.v1';
@@ -110,7 +112,8 @@ function parseSession(x: unknown): SessionData | null {
       if (PART_MAP[k] && typeof v === 'number' && v > 0 && v < 1000) stash[k] = Math.floor(v);
     }
   }
-  return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash };
+  const wagon = Array.isArray(s.wagon) ? s.wagon.filter((p): p is string => typeof p === 'string' && !!PART_MAP[p]).slice(0, 16) : [];
+  return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash, ...(wagon.length ? { wagon } : {}) };
 }
 
 export function loadSave(store: KV | null = typeof localStorage !== 'undefined' ? localStorage : null): SaveData {

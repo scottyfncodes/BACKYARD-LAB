@@ -21,5 +21,7 @@ export type SimEvent =
   | { type: 'pickup'; pos: Vector3; part: string }
   | { type: 'drop'; pos: Vector3; part: string }
   | { type: 'throw'; pos: Vector3; part: string }
+  | { type: 'load'; pos: Vector3; part: string }
+  | { type: 'hitch'; pos: Vector3; on: boolean }
   | { type: 'jump'; pos: Vector3 }
   | { type: 'land'; pos: Vector3; speed: number };

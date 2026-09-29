@@ -63,6 +63,8 @@ const fenceZ = (z: number, x0: number, x1: number, h = FENCE_H, vis = 'fence'): 
 export const WORLD = {
   bounds: { min: [-22, -6, -22] as V3, max: [36, 60, 24] as V3 },
   playerSpawn: { pos: [-1.5, 0, -6.2] as V3, yaw: 200 },
+  /** The kid's pull-along wagon, parked just outside the lab. */
+  wagon: { pos: [-6.6, 0, -3.4] as V3, yaw: 90 },
   workbench: { pos: [-11, 0, -5] as V3, top: 0.78, half: [0.75, 0.4] as [number, number] },
   zones: [
     { id: 'home_yard', min: [-14, -1, -10], max: [15, 30, 14] },

@@ -23,7 +23,7 @@ describe('save / load', () => {
     const c = b.free('crate');
     b.on('motor', 'base', c, [0, 0.2, 0], [0, 1, 0]);
     s.creations.push({ name: 'Zoomer', bp: b.bp, savedAt: 1 });
-    s.session = { mode: 'project', project: 'kite_in_tree', bench: b.bp, machines: [{ bp: b.bp, placement: { pos: [1, 0.2, 3], yaw: 0.5 } }], stash: { rope: 2, plank: 1 } };
+    s.session = { mode: 'project', project: 'kite_in_tree', bench: b.bp, machines: [{ bp: b.bp, placement: { pos: [1, 0.2, 3], yaw: 0.5 } }], stash: { rope: 2, plank: 1 }, wagon: ['brick', 'brick', 'rope'] };
     expect(writeSave(s, store)).toBe(true);
     const back = loadSave(store);
     expect(back).toEqual(s);
