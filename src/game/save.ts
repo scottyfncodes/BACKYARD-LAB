@@ -30,6 +30,8 @@ export interface SessionData {
   bench: Blueprint | null;
   machines: { bp: Blueprint; placement: MachinePlacement }[];
   stash: Record<string, number>;
+  /** Parts riding in the wagon. */
+  wagon?: string[];
   /** The bench machine's last test spot, so "test again" puts it straight back. */
   spot?: TestSpot | null;
 }
@@ -138,7 +140,8 @@ function parseSession(x: unknown): SessionData | null {
       if (PART_MAP[k] && typeof v === 'number' && v > 0 && v < 1000) stash[k] = Math.floor(v);
     }
   }
-  return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash, spot: parseSpot(s.spot) };
+  const wagon = Array.isArray(s.wagon) ? s.wagon.filter((p): p is string => typeof p === 'string' && !!PART_MAP[p]).slice(0, 16) : [];
+  return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash, spot: parseSpot(s.spot), ...(wagon.length ? { wagon } : {}) };
 }
 
 export function loadSave(store: KV | null = typeof localStorage !== 'undefined' ? localStorage : null): SaveData {

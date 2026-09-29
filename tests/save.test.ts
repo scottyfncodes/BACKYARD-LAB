@@ -31,6 +31,7 @@ describe('save / load', () => {
       bench: b.bp,
       machines: [{ bp: b.bp, placement: { pos: [1, 0.2, 3], yaw: 0.5 } }],
       stash: { rope: 2, plank: 1 },
+      wagon: ['brick', 'brick', 'rope'],
       spot: { placement: { pos: [9, 0.3, 8], yaw: 1 }, player: [10, 0, 9], yaw: 2 },
     };
     expect(writeSave(s, store)).toBe(true);
