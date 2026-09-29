@@ -201,20 +201,23 @@ export class BlueprintView {
     });
   }
 
-  highlight(uid: number | null) {
+  /** Glow one part: orange when selected, blue-green for "this is what it will connect to". */
+  highlight(uid: number | null, color = 0xffa020) {
     for (const [u, g] of this.parts) {
       g.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
         const sel = u === uid;
-        if (sel && !mesh.userData.orig) {
-          mesh.userData.orig = mesh.material;
-          const m = (mesh.material as THREE.MeshStandardMaterial).clone();
+        if (sel) {
+          if (!mesh.userData.orig) {
+            mesh.userData.orig = mesh.material;
+            mesh.material = (mesh.material as THREE.MeshStandardMaterial).clone();
+          }
+          const m = mesh.material as THREE.MeshStandardMaterial;
           if ('emissive' in m) {
-            m.emissive = new THREE.Color(0xffa020);
+            m.emissive = new THREE.Color(color);
             m.emissiveIntensity = 0.45;
           }
-          mesh.material = m;
         } else if (!sel && mesh.userData.orig) {
           (mesh.material as THREE.Material).dispose();
           mesh.material = mesh.userData.orig;

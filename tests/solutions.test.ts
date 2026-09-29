@@ -4,7 +4,7 @@ import { PROJECT_MAP } from '../src/data/projects';
 import { Builder } from '../src/sim/blueprint';
 import { initPhysics, toV } from '../src/sim/physics';
 import { emptyInput, Simulation } from '../src/sim/simulation';
-import { place, rcCar, runUntil, steerTo, successOf } from './helpers';
+import { expectFromBin, place, rcCar, runUntil, steerTo, successOf } from './helpers';
 
 beforeAll(async () => {
   await initPhysics();
@@ -18,6 +18,7 @@ describe('THE BALL: different solutions all work', () => {
   it('DRIVE: an RC car with duct tape goes under the fence gap and drags the ball home', () => {
     const sim = new Simulation({ project: PROJECT_MAP.ball_over_fence });
     const car = rcCar({ tape: true });
+    expectFromBin(PROJECT_MAP.ball_over_fence, car.bp);
     const m = place(sim, car.bp, 12.8, 4.8, Math.PI / 2);
     sim.run(0.3);
     sim.goAll();
@@ -52,6 +53,7 @@ describe('THE BALL: different solutions all work', () => {
     const b = new Builder('vac');
     const bat = b.free('battery_car');
     b.on('vacuum', 'back', bat, [0, 0.08, 0.09], [0, 0, 1]);
+    expectFromBin(PROJECT_MAP.ball_over_fence, b.bp);
     // Machine +z is the nozzle direction; yaw it to face the gap (+x).
     place(sim, b.bp, 13.9, 4.85, Math.PI / 2);
     sim.run(0.3);
@@ -66,6 +68,7 @@ describe('THE BALL: different solutions all work', () => {
     const crate = b.free('crate');
     b.on('battery_small', 'bottom', crate, [0, 0.2, 0], [0, 1, 0]);
     b.on('vacuum', 'back', crate, [0, 0.0, 0.25], [0, 0, 1]);
+    expectFromBin(PROJECT_MAP.ball_over_fence, b.bp);
     const m = place(sim, b.bp, 13.6, 4.85, Math.PI / 2);
     sim.run(0.3);
     sim.goAll();
@@ -132,13 +135,24 @@ describe('THE BALL: different solutions all work', () => {
   });
 });
 
+describe('THE KITE stays stuck until something frees it', () => {
+  it('left alone, the kite hangs in the tree (it used to shake itself loose after ~5 s)', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.kite_in_tree, player: false });
+    const kite = sim.itemByTag('target')!;
+    sim.run(30);
+    expect(kite.snag).toBeTruthy();
+    expect(toV(kite.rb.translation()).y).toBeGreaterThan(2.7);
+    expect(successOf(sim)).toBeUndefined();
+  });
+});
+
 describe('THE KITE is solvable', () => {
-  it('THROW: the kid chucks a wad of duct tape at the kite and knocks it loose', () => {
+  it('THROW: the kid chucks a brick from the garden at the kite and knocks it loose', () => {
     const sim = new Simulation({ project: PROJECT_MAP.kite_in_tree, junk: false });
-    const tape = sim.spawnItem({ part: 'duct_tape', pos: [9.2, 0.1, 7.3] });
+    const brick = sim.spawnItem({ part: 'brick', pos: [9.2, 0.1, 7.3] });
     sim.teleportPlayer([9.2, 0, 7.8], 0);
     sim.run(0.3);
-    expect(sim.pickUp(tape).ok).toBe(true);
+    expect(sim.pickUp(brick).ok).toBe(true);
     const kite = sim.itemByTag('target')!;
     const aim = () => {
       const to = toV(kite.rb.translation()).sub(sim.eye());
@@ -160,6 +174,7 @@ describe('THE KITE, machine version', () => {
     // Fan on its back on top of a crate, blowing straight up; battery beside it.
     b.on('box_fan', 'back', crate, [0, 0.2, 0], [0, 1, 0]);
     b.on('battery_small', 'side', crate, [0, 0, 0.25], [0, 0, 1]);
+    expectFromBin(PROJECT_MAP.kite_in_tree, b.bp);
     const m = place(sim, b.bp, 8.3, 7.9, 0);
     sim.run(1.2);
     sim.goAll();
@@ -182,6 +197,7 @@ describe("BISCUIT'S BALL is solvable", () => {
     const b = new Builder('vac');
     const bat = b.free('battery_car');
     b.on('vacuum', 'back', bat, [0, 0.08, 0.09], [0, 0, 1]);
+    expectFromBin(PROJECT_MAP.dog_ball, b.bp);
     // Nozzle faces machine +z; yaw -90deg points it at -x (under the shed).
     place(sim, b.bp, -6.55, 11.1, -Math.PI / 2);
     sim.run(0.3);

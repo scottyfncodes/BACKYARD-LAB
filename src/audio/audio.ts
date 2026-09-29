@@ -225,6 +225,23 @@ export class Audio {
         this.tone(d, t + 0.5, 349, 0.25, 0.25, 'triangle');
         this.tone(d, t + 0.75, 330, 0.6, 0.25, 'triangle', 300);
         break;
+      case 'ratchet':
+        // A joint engaging: three quick metallic clicks and a settle.
+        for (let i = 0; i < 3; i++) {
+          this.noiseBurst(d, t + i * 0.035, 0.02, 3200 + i * 300, 3, 0.5);
+          this.tone(d, t + i * 0.035, 1900 + i * 150, 0.02, 0.1, 'square');
+        }
+        this.tone(d, t + 0.1, 150, 0.12, 0.45, 'sine', 80);
+        break;
+      case 'hmm':
+        // Curious, not sad: "huh... interesting."
+        this.tone(d, t, 392, 0.16, 0.18, 'triangle', 370);
+        this.tone(d, t + 0.18, 440, 0.28, 0.18, 'triangle', 494);
+        break;
+      case 'results':
+        this.tone(d, t, 660, 0.06, 0.12, 'triangle');
+        this.noiseBurst(d, t, 0.08, 2500, 1.5, 0.15);
+        break;
       case 'discover':
         this.tone(d, t, 784, 0.12, 0.2, 'triangle');
         this.tone(d, t + 0.1, 1175, 0.25, 0.2, 'triangle');

@@ -61,6 +61,10 @@ export class Input {
     surface.addEventListener('touchend', (e) => this.touchEnd(e));
     surface.addEventListener('touchcancel', (e) => this.touchEnd(e));
     surface.addEventListener('mousedown', () => this.gesture());
+    // Phones are touch from the very first frame: no keyboard hints on buttons, and no
+    // relabelling the HUD under the finger on the first tap. Any touch anywhere counts.
+    this.touchMode = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+    window.addEventListener('touchstart', () => (this.touchMode = true), { capture: true, passive: true });
   }
 
   private gesture() {

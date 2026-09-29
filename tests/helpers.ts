@@ -1,4 +1,6 @@
 import { Vector3 } from 'three';
+import { expect } from 'vitest';
+import type { ProjectDef } from '../src/data/projects';
 import { Builder, blueprintBounds, type Blueprint } from '../src/sim/blueprint';
 import type { MachineInstance } from '../src/sim/machine';
 import { emptyInput, Simulation, type SimInput } from '../src/sim/simulation';
@@ -49,4 +51,11 @@ export function runUntil(sim: Simulation, maxSeconds: number, input: () => SimIn
 
 export function successOf(sim: Simulation) {
   return sim.objectiveEvents.find((e) => e.type === 'success');
+}
+
+/** A solution only counts if it can be built from that project's parts bin. */
+export function expectFromBin(project: ProjectDef, bp: Blueprint) {
+  const used = new Map<string, number>();
+  for (const p of bp.parts) used.set(p.def, (used.get(p.def) ?? 0) + 1);
+  for (const [id, n] of used) expect(project.bin[id] ?? 0, `${project.id} bin needs ${n}× ${id}`).toBeGreaterThanOrEqual(n);
 }

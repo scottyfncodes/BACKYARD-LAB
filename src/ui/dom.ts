@@ -16,6 +16,15 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<s
   return el;
 }
 
+/** A tiny physical tick where the device supports it (Android; iOS Safari ignores it). */
+export function buzz(ms = 12) {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    /* not supported */
+  }
+}
+
 /** A button that reacts on pointerdown (snappy on touch) but ignores drags. */
 export function btn(label: string, onPress: () => void, cls = ''): HTMLButtonElement {
   const b = h('button', { class: `btn ${cls}` });

@@ -5,7 +5,9 @@ import {
   Builder,
   components,
   computeAttach,
+  blueprintBounds,
   findPart,
+  liftOntoBench,
   newBlueprint,
   parseBlueprint,
   partPose,
@@ -204,5 +206,36 @@ describe('two rotation axes: spin and tilt', () => {
     const asked = computeAttach(b.bp, 'lawn_wheel', 'hub', hit, 0, 45);
     expect(asked.conn?.kind).toBe('driven');
     expect(asked.pose.q.angleTo(square.pose.q)).toBeLessThan(1e-6);
+  });
+});
+
+describe('forgiving building: nothing is refused just for poking below the bench', () => {
+  it('a wheel on the side of a flat plank lifts the whole machine instead of being refused', () => {
+    const b = new Builder();
+    const pl = b.free('plank');
+    const w = b.on('lawn_wheel', 'hub', pl, [0.45, 0, 0.075], [0, 0, 1]);
+    expect(blueprintBounds(b.bp).min.y).toBeLessThan(-0.05);
+    const before = b.pose(w).p.clone().sub(b.pose(pl).p);
+    const conn = b.bp.connections.find((c) => c.b === w)!;
+    const anchorGap = new Vector3(...conn.anchor).sub(b.pose(pl).p);
+    const dy = liftOntoBench(b.bp, w);
+    expect(dy).toBeGreaterThan(0.05);
+    expect(blueprintBounds(b.bp).min.y).toBeCloseTo(0, 5);
+    // Everything moved together: the wheel is still exactly where it was on the plank.
+    expect(b.pose(w).p.clone().sub(b.pose(pl).p).distanceTo(before)).toBeLessThan(1e-9);
+    expect(new Vector3(...conn.anchor).sub(b.pose(pl).p).distanceTo(anchorGap)).toBeLessThan(1e-9);
+    // Already resting on the bench: nothing to do.
+    expect(liftOntoBench(b.bp, w)).toBe(0);
+  });
+
+  it('only the piece that changed is lifted; a separate lump on the bench stays put', () => {
+    const b = new Builder();
+    const pl = b.free('plank', -0.3, 0);
+    const brick = b.free('brick', 0.5, 0.2);
+    const y0 = b.pose(brick).p.y;
+    const w = b.on('lawn_wheel', 'hub', pl, [0.45, 0, 0.075], [0, 0, 1]);
+    liftOntoBench(b.bp, w);
+    expect(b.pose(brick).p.y).toBe(y0);
+    expect(b.pose(pl).p.y).toBeGreaterThan(y0);
   });
 });
