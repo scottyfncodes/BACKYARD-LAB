@@ -20,7 +20,7 @@ describe('Home Screen / PWA', () => {
     expect(manifest.start_url).toBe('./');
     expect(manifest.short_name).toBe('Backyard Lab');
     for (const icon of manifest.icons) {
-      const [w, h] = pngSize(join('public', icon.src));
+      const [w, h] = pngSize(join('public', icon.src.split('?')[0]));
       expect(`${w}x${h}`).toBe(icon.sizes);
     }
     expect(manifest.icons.some((i: { purpose: string }) => i.purpose === 'maskable')).toBe(true);
@@ -30,7 +30,7 @@ describe('Home Screen / PWA', () => {
     expect(html).toMatch(/name="apple-mobile-web-app-capable" content="yes"/);
     expect(html).toMatch(/name="apple-mobile-web-app-title" content="Backyard Lab"/);
     expect(html).toMatch(/viewport-fit=cover/);
-    const touch = [...html.matchAll(/rel="apple-touch-icon"[^>]*href="\.\/([^"]+)"/g)].map((m) => m[1]);
+    const touch = [...html.matchAll(/rel="apple-touch-icon"[^>]*href="\.\/([^"?]+)/g)].map((m) => m[1]);
     expect(touch.length).toBeGreaterThan(0);
     for (const t of touch) {
       expect(existsSync(join('public', t)), t).toBe(true);
