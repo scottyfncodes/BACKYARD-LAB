@@ -231,6 +231,7 @@ export class BuildMode {
 
   exit() {
     this.active = false;
+    document.body.classList.remove('noting');
     this.clearHolding();
     this.select(null);
     for (const [t, n, f] of this.listeners) t.removeEventListener(n, f);
@@ -302,6 +303,8 @@ export class BuildMode {
   private renderNotes() {
     const notes = this.testing ? null : this.host.notes(this.bp);
     this.root.classList.toggle('noting', !!notes);
+    // Toasts move out from under the notes card while it is up.
+    document.body.classList.toggle('noting', !!notes);
     if (!notes) {
       this.notesEl.classList.add('hidden');
       this.notesKey = '';

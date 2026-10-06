@@ -9,7 +9,7 @@ import { btn, h, type Modal } from '../ui/dom';
  */
 export interface BookHost {
   modal: Modal;
-  book: { found: boolean; read: string[] };
+  book: { found: boolean; revealed: string[]; read: string[] };
   onChange(): void;
   play(sound: string): void;
 }
@@ -392,16 +392,34 @@ export class PhysicsBook {
     onClose();
   }
 
+  private unstuck(c: ChapterDef): boolean {
+    return this.host.book.revealed.includes(c.id);
+  }
+
   private showContents(onClose: () => void) {
     this.stopAnim();
     const read = this.host.book.read;
+    // Chapters the kid has not met yet have their pages stuck together: a teaser, not a lesson.
     const rows = CHAPTERS.map((c) =>
-      btn(
-        `<span class="book-ch"><b>${c.n}. ${c.title}</b><small>${c.useFor}</small></span><span class="book-tick">${read.includes(c.id) ? '✓' : ''}</span>`,
-        () => this.showChapter(c, onClose),
-        'book-row',
-      ),
+      this.unstuck(c)
+        ? btn(
+            `<span class="book-ch"><b>${c.n}. ${c.title}</b><small>${c.useFor}</small></span><span class="book-tick">${read.includes(c.id) ? '✓' : ''}</span>`,
+            () => this.showChapter(c, onClose),
+            'book-row',
+          )
+        : btn(
+            `<span class="book-ch"><b>${c.n}. ${c.title}</b><small>Pages stuck together. ${c.unlock.withBook ? '' : c.unlock.tease}</small></span><span class="book-tick">📎</span>`,
+            () => {
+              this.host.play('error');
+              const row = this.host.modal.el.querySelector(`[data-stuck="${c.id}"]`);
+              row?.classList.remove('shake');
+              void (row as HTMLElement | null)?.offsetWidth;
+              row?.classList.add('shake');
+            },
+            'book-row stuck',
+          ),
     );
+    CHAPTERS.forEach((c, i) => rows[i].setAttribute('data-stuck', c.id));
     const later = LATER_CHAPTERS.map((c) => h('div', { class: 'book-later' }, h('b', {}, c.title), h('small', {}, c.useFor)));
     this.host.modal.show(
       [
@@ -418,6 +436,10 @@ export class PhysicsBook {
   }
 
   private showChapter(c: ChapterDef, onClose: () => void) {
+    if (!this.unstuck(c)) {
+      this.showContents(onClose);
+      return;
+    }
     this.stopAnim();
     if (!this.host.book.read.includes(c.id)) {
       this.host.book.read.push(c.id);
@@ -446,8 +468,8 @@ export class PhysicsBook {
           'div',
           { class: 'row' },
           btn('📖 Contents', () => this.showContents(onClose), 'small'),
-          prev ? btn(`◀ ${prev.title}`, () => this.showChapter(prev, onClose), 'small') : null,
-          next ? btn(`${next.title} ▶`, () => this.showChapter(next, onClose), 'small') : null,
+          prev && this.unstuck(prev) ? btn(`◀ ${prev.title}`, () => this.showChapter(prev, onClose), 'small') : null,
+          next && this.unstuck(next) ? btn(`${next.title} ▶`, () => this.showChapter(next, onClose), 'small') : null,
           btn('Back to it', () => this.close(onClose), 'go'),
         ),
       ],

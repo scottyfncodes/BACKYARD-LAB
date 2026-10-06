@@ -770,6 +770,7 @@ body.has-results .actions.right, body.has-results .thought { display: none !impo
 .wagon-notes .wn.done { opacity: 0.7; }
 .wagon-notes .wn.ok { color: #1f6b35; }
 .build-ui.noting .build-status { top: calc(200px + var(--safe-t)); }
+body.noting .toasts { top: calc(218px + var(--safe-t)); }
 @media (max-height: 480px) {
   .wagon-notes { width: min(260px, 40vw); top: calc(58px + var(--safe-t)); padding: 4px 8px 6px; }
   .wagon-notes .wn { font-size: 12px; margin: 2px 0; }
@@ -830,7 +831,17 @@ body.has-results .actions.right, body.has-results .thought { display: none !impo
 .book-slider { display: block; margin: 6px 0; font-size: 13px; font-weight: 800; }
 .book-slider span { display: flex; justify-content: space-between; gap: 8px; }
 .book-slider b { color: #2b4a7a; white-space: nowrap; }
-.book-slider input[type='range'] { width: 100%; margin: 2px 0 0; accent-color: #2b4a7a; height: 28px; }
+/* Sliders inside a scrolling card: a finger on the slider drags the slider, never the page. Big thumbs for thumbs. */
+.book-slider input[type='range'] { width: 100%; margin: 2px 0 0; accent-color: #2b4a7a; height: 40px; touch-action: none; -webkit-appearance: none; appearance: none; background: transparent; }
+.book-slider input[type='range']::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: #d9d2bf; border: 2px solid var(--ink); }
+.book-slider input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 30px; height: 30px; border-radius: 50%; background: #2b4a7a; border: 3px solid var(--ink); margin-top: -13px; box-shadow: 0 2px 0 rgba(47, 36, 24, 0.35); }
+.book-slider input[type='range']::-moz-range-track { height: 8px; border-radius: 4px; background: #d9d2bf; border: 2px solid var(--ink); }
+.book-slider input[type='range']::-moz-range-thumb { width: 26px; height: 26px; border-radius: 50%; background: #2b4a7a; border: 3px solid var(--ink); }
+.card.book { overscroll-behavior: contain; }
+.btn.book-row.stuck { opacity: 0.55; background: #efe8d6; }
+.btn.book-row.stuck .book-tick { font-size: 16px; }
+.btn.book-row.shake { animation: shake 0.3s ease-in-out; }
+@keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 .book-choices { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .book-choices .btn.on { background: var(--tape); transform: translateY(2px); }
 .book-words { margin: 12px 0 0; font-size: 13px; font-weight: 700; line-height: 1.35; }

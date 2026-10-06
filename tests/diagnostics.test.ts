@@ -107,6 +107,17 @@ describe('test results come from what the physics did', () => {
     expect(g(report, 'reach')).toBe(1);
   });
 
+  it('a bottle rocket on a brick under the kite flies past it: the results say how high and point at Projectile Motion', () => {
+    const b = new Builder('rocket');
+    const brick = b.free('brick');
+    b.on('bottle_rocket', 'base', brick, [0, 0.032, 0], [0, 1, 0]);
+    const { report, stats } = trial(PROJECT_MAP.kite_in_tree, b.bp, 8.65, 7.66, 0, 6);
+    expect(stats.launched).toBe(true);
+    expect(stats.launchPeak).toBeGreaterThan(2);
+    expect(report.chapter).toBe('projectile');
+    expect(report.observation).toMatch(/flew/i);
+  });
+
   it('goal distance is zero inside the goal zone and grows outside it', () => {
     const ball = PROJECT_MAP.ball_over_fence;
     expect(goalGap(ball, { x: 0, y: 0, z: 0 })).toBe(0);

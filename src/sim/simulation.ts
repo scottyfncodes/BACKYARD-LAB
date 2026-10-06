@@ -382,8 +382,10 @@ export class Simulation implements MachineHost {
     // Step-up assist for kerbs, deck edges and junk.
     if (this.grounded && desired.lengthSq() > 0.1) {
       const dir = desired.clone().normalize();
-      const low = this.physics.raycast(new Vector3(pos.x, footY + 0.06, pos.z), dir, PLAYER.radius + 0.22, undefined, rb);
-      const high = this.physics.raycast(new Vector3(pos.x, footY + 0.42, pos.z), dir, PLAYER.radius + 0.3, undefined, rb);
+      // The wagon on the handle is never a step: walking into it shoves it along instead.
+      const notWagon = (c: Collider) => !(this.wagon?.hitched && c.handle === this.wagon.collider.handle);
+      const low = this.physics.raycast(new Vector3(pos.x, footY + 0.06, pos.z), dir, PLAYER.radius + 0.22, undefined, rb, notWagon);
+      const high = this.physics.raycast(new Vector3(pos.x, footY + 0.42, pos.z), dir, PLAYER.radius + 0.3, undefined, rb, notWagon);
       if (low && !high && low.normal.y < 0.5) vy = Math.max(vy, 2.4);
     }
 
