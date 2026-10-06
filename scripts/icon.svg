@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffa53a"/>
+      <stop offset="1" stop-color="#f06a0c"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6fb7f0"/>
+      <stop offset="1" stop-color="#bfe3ff"/>
+    </linearGradient>
+    <clipPath id="flask"><path d="M214 100 L 298 100 L 298 196 L 392 382 C 408 416, 388 444, 352 444 L 160 444 C 124 444, 104 416, 120 382 L 214 196 Z"/></clipPath>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <circle cx="256" cy="290" r="210" fill="#fff" opacity=".08"/>
+  <!-- the backyard, inside the flask -->
+  <g clip-path="url(#flask)">
+    <rect x="90" y="90" width="340" height="370" fill="url(#sky)"/>
+    <circle cx="296" cy="246" r="20" fill="#ffe27a"/>
+    <g fill="#f3e6c8" stroke="#3a2a1c" stroke-width="5" stroke-linejoin="round">
+      <path d="M140 330 L 140 300 L 156 284 L 172 300 L 172 380 L 140 380 Z"/>
+      <path d="M190 330 L 190 300 L 206 284 L 222 300 L 222 380 L 190 380 Z"/>
+      <path d="M290 330 L 290 300 L 306 284 L 322 300 L 322 380 L 290 380 Z"/>
+      <path d="M340 330 L 340 300 L 356 284 L 372 300 L 372 380 L 340 380 Z"/>
+      <path d="M240 330 L 240 300 L 256 284 L 272 300 L 272 380 L 240 380 Z"/>
+    </g>
+    <rect x="96" y="318" width="320" height="14" fill="#c08850" stroke="#3a2a1c" stroke-width="5"/>
+    <path d="M90 372 C 180 352, 330 352, 430 372 L 430 460 L 90 460 Z" fill="#5fbf4a"/>
+    <path d="M90 400 C 200 384, 320 386, 430 404 L 430 460 L 90 460 Z" fill="#3f9a37"/>
+    <!-- the ball, mid-launch -->
+    <circle cx="222" cy="262" r="22" fill="#e8402a" stroke="#3a2a1c" stroke-width="5"/>
+    <path d="M204 252 Q 222 272 240 256" fill="none" stroke="#fff6e6" stroke-width="7" stroke-linecap="round"/>
+  </g>
+  <!-- glass -->
+  <path d="M214 100 L 298 100 L 298 196 L 392 382 C 408 416, 388 444, 352 444 L 160 444 C 124 444, 104 416, 120 382 L 214 196 Z" fill="none" stroke="#2b1d12" stroke-width="16" stroke-linejoin="round"/>
+  <rect x="196" y="78" width="120" height="30" rx="12" fill="#fff6e6" stroke="#2b1d12" stroke-width="12"/>
+  <path d="M154 404 L 196 322" stroke="#fff" stroke-width="10" stroke-linecap="round" opacity=".6"/>
+  <!-- ideas bubbling out: a gear and two bubbles -->
+  <g transform="translate(372 120)">
+    <path fill="#fff6e6" stroke="#2b1d12" stroke-width="8" stroke-linejoin="round" d="M-8 -40 L 8 -40 L 11 -28 L 21 -23 L 32 -30 L 43 -19 L 36 -8 L 41 2 L 52 5 L 52 21 L 41 24 L 36 34 L 43 45 L 32 56 L 21 49 L 11 54 L 8 66 L -8 66 L -11 54 L -21 49 L -32 56 L -43 45 L -36 34 L -41 24 L -52 21 L -52 5 L -41 2 L -36 -8 L -43 -19 L -32 -30 L -21 -23 L -11 -28 Z" transform="translate(0 -13) scale(.82)"/>
+    <circle cx="0" cy="0" r="12" fill="#f06a0c" stroke="#2b1d12" stroke-width="7"/>
+  </g>
+  <circle cx="330" cy="58" r="12" fill="#fff6e6" stroke="#2b1d12" stroke-width="7"/>
+  <circle cx="440" cy="52" r="9" fill="#fff6e6" stroke="#2b1d12" stroke-width="6"/>
+</svg>
