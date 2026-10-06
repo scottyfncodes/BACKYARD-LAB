@@ -97,6 +97,7 @@ describe('objectives are about the world, not the machine', () => {
     held: () => false,
     touched: () => false,
     snagged: () => false,
+    wagonLoad: () => 0,
     ...over,
   });
   const p = PROJECT_MAP.ball_over_fence;

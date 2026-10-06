@@ -1,5 +1,6 @@
 import { Vector3 } from 'three';
 import { getPart } from '../data/parts';
+import type { ChapterId } from '../data/physics101';
 import type { MetricId, ProjectDef } from '../data/projects';
 import { zone } from '../data/world';
 import { components } from '../sim/blueprint';
@@ -40,6 +41,13 @@ export interface RunStats {
   /** Peak tug on a snagged target as a fraction of what it takes to tear it loose. */
   pushPeak: number;
   targetTopSpeed: number;
+  /** How high the target got above where it started, m. */
+  targetPeak: number;
+  /** It took off: left the ground on its own (not in the kid's hands). */
+  flew: boolean;
+  /** Where it came back down, if it flew: how far it travelled through the air, and how far from home it landed. */
+  flightRange: number;
+  landedGap: number | null;
   /** A vacuum or fan on the machine: how close to the target its air ever pointed (degrees, while in range). */
   airPart: string | null;
   aimOff: number | null;
@@ -75,6 +83,10 @@ export interface TestReport {
   observation: string;
   tryNext: string | null;
   mood: 'worked' | 'close' | 'learned';
+  /** Plain measurements from the run ("Closest: 0.6 m from the ball"), the clues a failed test leaves behind. */
+  facts: string[];
+  /** The PHYSICS 101 chapter that explains what just happened, if one does. */
+  chapter: ChapterId | null;
   /** A one-tap next step the results card can offer, when the fix is that obvious. */
   fix?: 'turn';
 }
@@ -99,6 +111,10 @@ export function emptyStats(): RunStats {
     unsnagged: false,
     pushPeak: 0,
     targetTopSpeed: 0,
+    targetPeak: 0,
+    flew: false,
+    flightRange: 0,
+    landedGap: null,
     airPart: null,
     aimOff: null,
     airBlocked: false,
@@ -140,6 +156,7 @@ export class TestProbe {
   private startUp = new Map<number, Vector3>();
   private targetStart: Vector3 | null = null;
   private wasGrabbed = false;
+  private airborne: { from: Vector3 } | null = null;
 
   begin(sim: Simulation, project: ProjectDef | null, exclude: number | null = null) {
     this.stats = emptyStats();
@@ -148,6 +165,7 @@ export class TestProbe {
     this.startCenter.clear();
     this.startUp.clear();
     this.wasGrabbed = false;
+    this.airborne = null;
     for (const m of this.machines) {
       this.startCenter.set(m.id, m.center());
       const b = mainBody(m);
@@ -216,6 +234,17 @@ export class TestProbe {
     if (sim.carried?.item === t) s.playerHandled = true;
     s.targetMoved = Math.max(s.targetMoved, p.distanceTo(this.targetStart));
     s.targetTopSpeed = Math.max(s.targetTopSpeed, toV(t.rb.linvel()).length());
+    s.targetPeak = Math.max(s.targetPeak, p.y - this.targetStart.y);
+    // Flight: it left the ground on its own, and where it came back down.
+    const up = p.y - this.targetStart.y;
+    if (!this.airborne && up > 0.35 && sim.carried?.item !== t) {
+      this.airborne = { from: p.clone() };
+      s.flew = true;
+    } else if (this.airborne && up < 0.12) {
+      s.flightRange = Math.max(s.flightRange, Math.hypot(p.x - this.airborne.from.x, p.z - this.airborne.from.z));
+      s.landedGap = goalGap(this.project, p);
+      this.airborne = null;
+    }
     const g = goalGap(this.project, p);
     s.goalBest = Math.min(s.goalBest, g);
     s.goalEnd = g;
@@ -339,43 +368,75 @@ export function analyze(s: RunStats, project: ProjectDef | null): TestReport {
   const metrics: MetricId[] = project?.metrics ?? ['stability', 'power'];
   const gauges = metrics.map((id) => gauge(id, s));
   const what = project?.target ?? 'target';
-  const say = (observation: string, tryNext: string | null, mood: TestReport['mood'] = 'learned'): TestReport => ({ gauges, observation, tryNext, mood });
+  const facts = factsOf(s, project);
+  const say = (observation: string, tryNext: string | null, mood: TestReport['mood'] = 'learned', chapter: ChapterId | null = null): TestReport => ({ gauges, observation, tryNext, mood, facts, chapter });
   const closer = s.goalStart - s.goalEnd;
   const power = gauge('power', s);
 
   if (s.success) return say(`It worked! The ${what} is back where it belongs.`, 'Wait. What ELSE could you build?', 'worked');
-  if (s.noBattery) return say('Nothing happened. The motors (or fan, or vacuum) need a battery stuck onto the same machine.', 'Try sticking a battery anywhere on it.');
-  if (s.dead) return say('It started… then the battery ran flat.', 'What happens with a bigger battery?');
+  if (s.noBattery) return say('Nothing happened. The motors (or fan, or vacuum) need a battery stuck onto the same machine.', 'Try sticking a battery anywhere on it.', 'learned', 'energy');
+  if (s.dead) return say('It started… then the battery ran flat.', 'What happens with a bigger battery?', 'learned', 'energy');
   const reached = (gauge('reach', s).value ?? 1) >= 0.95;
   const weak = s.powered && power.value !== null && power.value < 0.55;
   const alsoWeak = weak ? ` The battery was struggling too (about ${Math.round((power.value ?? 0) * 100)}% power).` : '';
   if (weak && reached && closer < Math.max(0.3, s.goalStart * 0.9))
-    return say(`It was trying, but the battery couldn’t keep up. It only got about ${Math.round((power.value ?? 0) * 100)}% of the power it wanted.`, 'What happens with a bigger battery?');
+    return say(`It was trying, but the battery couldn’t keep up. It only got about ${Math.round((power.value ?? 0) * 100)}% of the power it wanted.`, 'What happens with a bigger battery?', 'learned', 'energy');
   if (s.breaks && s.lastBreak) {
     const a = getPart(s.lastBreak.part).name.toLowerCase();
     const b = getPart(s.lastBreak.other).name.toLowerCase();
-    return say(`CLUNK. The ${a} came off the ${b}. That joint had more load than it could take.`, 'Less weight on it? Or attach it somewhere sturdier?');
+    return say(`CLUNK. The ${a} came off the ${b}. That joint had more load than it could take.`, 'Less weight on it? Or attach it somewhere sturdier?', 'learned', 'forces');
   }
-  if (s.snaps && s.lastSnap) return say(`SNAP. The ${getPart(s.lastSnap).name.toLowerCase()} couldn’t take the pull.`, 'Something lighter, or a shorter pull?');
-  if (s.maxTilt > 100) return say('It flipped right over. Interesting!', 'Try a wider base, or something heavy down low.');
+  if (s.snaps && s.lastSnap) return say(`SNAP. The ${getPart(s.lastSnap).name.toLowerCase()} couldn’t take the pull.`, 'Something lighter, or a shorter pull?', 'learned', 'forces');
+  if (s.maxTilt > 100) return say('It flipped right over. Interesting!', 'Try a wider base, or something heavy down low.', 'learned', 'levers');
   if (s.snagged && s.unsnagged && s.goalEnd > 0.3) return say(`The ${what} is free! Now it just has to come down.`, 'What happens when the push stops? (■ STOP)', 'close');
-  if (s.snagged && !s.unsnagged && s.pushPeak >= 0.45) return say(`The ${what} shook, but it’s still snagged. Almost!`, 'A bit more push? Closer, or stronger?', 'close');
-  if (s.grabbed && s.lostGrip > 0 && !s.heldAtEnd) return say(`It grabbed the ${what}… and then lost its grip.`, 'Hold it tighter, or pull more gently?', 'close');
-  if (s.hasTarget && closer > 0.3) return say(`The ${what} came ${m1(closer)} closer, but not all the way.`, s.goalEnd < 1 ? 'SO close. One small change?' : 'More power, or start closer?', 'close');
-  if (s.hasTarget && closer < -0.3 && !s.playerHandled) return say(`The ${what} went the other way!`, 'What if it pointed the other way?');
-  if (s.maxTilt > 45) return say('The machine lost its balance and tipped.', 'Try a wider base, or something heavy down low.');
-  if (s.hasTarget && s.targetMoved > 0.25 && !s.playerHandled) return say(`The ${what} moved, but not toward home.`, 'Change the angle and try again?');
-  if (s.hasTarget && s.closest <= 0.05) return say(`It reached the ${what}, but didn’t move it.`, 'It needs a way to grab, pull or push it.', 'close');
+  if (s.snagged && !s.unsnagged && s.pushPeak >= 0.45) return say(`The ${what} shook, but it’s still snagged. Almost!`, 'A bit more push? Closer, or stronger?', 'close', 'forces');
+  if (s.grabbed && s.lostGrip > 0 && !s.heldAtEnd) return say(`It grabbed the ${what}… and then lost its grip.`, 'Hold it tighter, or pull more gently?', 'close', 'forces');
+  // It flew: a launch that came up short, or long, or sideways.
+  if (s.hasTarget && s.flew && s.landedGap !== null && !s.playerHandled && s.landedGap > 0.1) {
+    const closerByFlight = s.goalStart - s.landedGap;
+    return say(
+      `It flew! ${m1(s.flightRange)} through the air, ${m1(s.targetPeak)} high at the top, and came down ${m1(s.landedGap)} short of home.`,
+      closerByFlight > 0 ? 'More launch speed? A different angle?' : 'It went the wrong way. Which way is the launch pointing?',
+      closerByFlight > 0 ? 'close' : 'learned',
+      'projectile',
+    );
+  }
+  if (s.hasTarget && closer > 0.3) return say(`The ${what} came ${m1(closer)} closer, but not all the way.`, s.goalEnd < 1 ? 'SO close. One small change?' : 'More power, or start closer?', 'close', 'motion');
+  if (s.hasTarget && closer < -0.3 && !s.playerHandled) return say(`The ${what} went the other way!`, 'What if it pointed the other way?', 'learned', 'forces');
+  if (s.maxTilt > 45) return say('The machine lost its balance and tipped.', 'Try a wider base, or something heavy down low.', 'learned', 'levers');
+  if (s.hasTarget && s.targetMoved > 0.25 && !s.playerHandled) return say(`The ${what} moved, but not toward home.`, 'Change the angle and try again?', 'learned', 'forces');
+  if (s.hasTarget && s.closest <= 0.05) return say(`It reached the ${what}, but didn’t move it.`, 'It needs a way to grab, pull or push it.', 'close', 'forces');
   // Air tools: close enough, but aimed off, or blocked by something solid.
   if (s.hasTarget && s.airPart && s.targetMoved < 0.25) {
     const tool = getPart(s.airPart).name.toLowerCase();
-    if (s.aimOff !== null && s.aimOff > 35) return { ...say(`The ${tool} was close enough, but it was pointing away from the ${what}.`, `Turn it to point right at the ${what}?`, 'close'), fix: 'turn' };
+    if (s.aimOff !== null && s.aimOff > 35) return { ...say(`The ${tool} was close enough, but it was pointing away from the ${what}.`, `Turn it to point right at the ${what}?`, 'close', 'forces'), fix: 'turn' };
     if (s.airBlocked) return say(`The ${tool} was pointed at the ${what}, but something solid was in the way.`, 'Find a clear path to it?', 'close');
   }
   if (s.hasTarget && Number.isFinite(s.closest)) {
-    if (s.machineMoved < 0.05 && !s.powered) return say('Nothing moved. Machines need something to make them go: a motor, a fan, a spring, a rocket…', 'What would make it move?');
-    return say(`It didn’t reach. The closest it got was ${m1(s.closest)} from the ${what}.${alsoWeak}`, s.closest > 1.5 ? 'Start closer, or build something longer?' : 'A little more reach?');
+    if (s.machineMoved < 0.05 && !s.powered) return say('Nothing moved. Machines need something to make them go: a motor, a fan, a spring, a rocket…', 'What would make it move?', 'learned', 'forces');
+    return say(`It didn’t reach. The closest it got was ${m1(s.closest)} from the ${what}.${alsoWeak}`, s.closest > 1.5 ? 'Start closer, or build something longer?' : 'A little more reach?', 'learned', weak ? 'energy' : 'motion');
   }
-  if (s.machineMoved < 0.05 && !s.powered) return say('Nothing moved. Machines need something to make them go: a motor, a fan, a spring, a rocket…', 'What would make it move?');
+  if (s.machineMoved < 0.05 && !s.powered) return say('Nothing moved. Machines need something to make them go: a motor, a fan, a spring, a rocket…', 'What would make it move?', 'learned', 'forces');
   return say('Interesting result!', 'Change one thing and test again.');
+}
+
+/**
+ * The clues: a handful of measurements, in plain units, so a test that
+ * "didn't work" still hands over numbers to think with. Never more than four.
+ */
+export function factsOf(s: RunStats, project: ProjectDef | null): string[] {
+  const what = project?.target ?? 'target';
+  const out: string[] = [];
+  if (s.hasTarget && s.flew) out.push(`The ${what} flew ${m1(s.flightRange)}, ${m1(s.targetPeak)} high`);
+  if (s.hasTarget && Number.isFinite(s.closest) && s.closest > 0.02 && !s.flew) out.push(`Closest: ${m1(s.closest)} from the ${what}`);
+  if (s.hasTarget && s.targetMoved > 0.1 && !s.playerHandled) out.push(`The ${what} moved ${m1(s.targetMoved)}`);
+  if (s.hasTarget && s.goalEnd > 0.05 && s.goalStart > 0.05) out.push(`Still ${m1(s.goalEnd)} from home`);
+  if (s.hasTarget && s.targetTopSpeed > 0.5 && !s.playerHandled) out.push(`Top speed ${m1(s.targetTopSpeed).replace(' m', ' m/s')}`);
+  if (s.machineMoved > 0.3) out.push(`The machine travelled ${m1(s.machineMoved)}`);
+  if (s.maxTilt > 10) out.push(`Tilted ${Math.round(s.maxTilt)}°`);
+  if (s.powered && s.factorSamples && !s.noBattery) {
+    const avg = s.factorSum / s.factorSamples;
+    if (avg < 0.98) out.push(`Battery kept up ${Math.round(avg * 100)}% of the time`);
+  }
+  return out.slice(0, 4);
 }

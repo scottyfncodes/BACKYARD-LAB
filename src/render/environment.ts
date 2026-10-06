@@ -203,6 +203,21 @@ export function buildEnvironment(opts: { grassBlades: number }): Environment {
         B.box(0.12, 0.1, 0.1, M.plastic(0x1f4fb0), x - h[0] + 0.1, top + 0.05, z + h[2] - 0.05);
         break;
       }
+      case 'book': {
+        // A worn textbook: dark cover, pale page edges, a cracked spine, a sticky note poking out.
+        const ry = ((s.rotY ?? 0) * Math.PI) / 180;
+        const e = new THREE.Euler(0, ry, 0);
+        const loc = (lx: number, ly: number, lz: number) => V(x + lx * Math.cos(ry) + lz * Math.sin(ry), y + ly, z - lx * Math.sin(ry) + lz * Math.cos(ry));
+        B.add(new THREE.BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2), M.matte(0x2b4a7a), loc(0, 0, 0), e);
+        B.add(new THREE.BoxGeometry(h[0] * 2 - 0.01, h[1] * 2 - 0.012, h[2] * 2 + 0.004), M.matte(0xf1e7cf), loc(0.012, 0, 0), e);
+        B.add(new THREE.BoxGeometry(0.014, h[1] * 2 + 0.004, h[2] * 2 + 0.004), M.matte(0x1d3558), loc(-h[0], 0, 0), e);
+        B.add(new THREE.BoxGeometry(0.05, 0.002, 0.05), M.plastic(0xf2d27a), loc(0.05, h[1] + 0.001, h[2] - 0.02), e);
+        const title = new THREE.Mesh(new THREE.PlaneGeometry(h[2] * 1.5, h[0] * 1.1), new THREE.MeshStandardMaterial({ map: labelTexture('PHYSICS 101', '#2b4a7a', '#f4e3b5', 256, 96), roughness: 0.9 }));
+        title.position.copy(loc(0.01, h[1] + 0.0015, 0));
+        title.rotation.set(-Math.PI / 2, 0, ry + Math.PI / 2, 'YXZ');
+        root.add(title);
+        break;
+      }
       case 'shelf':
         B.box(h[0] * 2, h[1] * 2, h[2] * 2, woodM, x, y, z);
         B.box(h[0] * 2, 0.04, h[2] * 2, woodM, x, 1.6, z);

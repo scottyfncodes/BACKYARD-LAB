@@ -17,6 +17,8 @@ export type Cond =
   | { type: 'outOfBounds'; tag: string }
   | { type: 'near'; a: string; b: string; dist: number }
   | { type: 'timeUnder'; seconds: number }
+  /** At least this many things riding in the wagon. */
+  | { type: 'wagonLoad'; min: number }
   | { type: 'all'; of: Cond[] }
   | { type: 'any'; of: Cond[] }
   | { type: 'not'; cond: Cond };
@@ -89,6 +91,15 @@ export interface ProjectDef {
   /** Where the camera looks during the intro. */
   focus: V3;
   intro?: 'ballOverFence';
+  /**
+   * The kid thinking out loud right after the briefing: a chain of "what ifs"
+   * that wanders toward an idea without ever being a checklist.
+   */
+  musings?: string[];
+  /** Solving this is the moment the open sandbox makes sense (default: yes). */
+  unlocksSandbox?: boolean;
+  /** MISSION 0: the deliverable is the wagon itself, read off the bench. */
+  deliverable?: 'wagon';
 }
 
 const outOfBounds = (tag: string, message: string): FailRule => ({
@@ -98,6 +109,53 @@ const outOfBounds = (tag: string, message: string): FailRule => ({
 });
 
 export const PROJECTS: ProjectDef[] = [
+  {
+    // MISSION 0: the first invention. Stuff is scattered all over the yard and
+    // carrying it one piece at a time is the worst. Build something to haul it.
+    id: 'build_wagon',
+    title: 'THE WAGON',
+    pitch: ['Junk everywhere. Carrying it to the lab one piece at a time is the worst.', 'Build something to haul it.'],
+    concept: { name: 'WHEELS', blurb: 'Wheels spin on axles. Axles hold the wheels to the body.' },
+    goals: ['Build something that rolls', 'Give it a handle to pull it by', 'Load 3 things on it and haul them into the lab'],
+    bin: { plank: 2, crate: 1, lawn_wheel: 4, bike_wheel: 2, broom: 1, bucket: 1, duct_tape: 2, rope: 1 },
+    hints: [
+      'Look at the junk pile by the garage. Everything a wagon is made of is lying right there.',
+      'A wheel only rolls when its hub is pressed onto the SIDE of something. Laid flat on top, it just spins like a record.',
+      'Four wheels on the sides of something long is a cart. A cart still needs a handle: something long sticking out one end.',
+      'Lay a Wooden Plank on the bench. Press a Lawnmower Wheel onto each corner of its long sides. Stick the Broom’s handle end onto one end of the plank. Then ROLL IT OUT.',
+    ],
+    nudges: [
+      { word: 'Roll', line: 'What rolls? What would make a flat thing roll?' },
+      { word: 'Spin', line: 'A wheel is useless if it can’t spin. What does it spin on?' },
+      { word: 'Pull', line: 'Once it rolls, how do I get it to follow me?' },
+      { word: 'Carry', line: 'Where does the junk actually sit?' },
+    ],
+    metrics: ['stability'],
+    target: 'junk',
+    goalZone: 'lab',
+    site: { label: 'TO THE JUNK PILE', pos: [-4.6, 0, 2.6], yaw: Math.PI / 2 },
+    approach: [-5.4, 0, 1.4],
+    stage: 1,
+    props: [],
+    gateLocked: true,
+    success: {
+      type: 'all',
+      of: [
+        { type: 'inZone', tag: 'wagon', zone: 'lab' },
+        { type: 'wagonLoad', min: 3 },
+      ],
+    },
+    holdFor: 0.5,
+    fails: [],
+    bonuses: [
+      { id: 'four_wheels', label: 'Rolled in under 4 minutes', kind: 'atEnd', cond: { type: 'timeUnder', seconds: 240 } },
+    ],
+    unlocks: ['ball_over_fence'],
+    focus: [-6.8, 0.4, 2.6],
+    musings: ['Carry one thing. Walk. Come back. Carry one thing. Walk… no.', 'What if the junk came with me?', 'Something with wheels. Something I can pull.'],
+    unlocksSandbox: false,
+    deliverable: 'wagon',
+  },
   {
     id: 'ball_over_fence',
     title: 'THE BALL',
@@ -142,6 +200,12 @@ export const PROJECTS: ProjectDef[] = [
     unlocks: ['dog_ball', 'kite_in_tree'],
     focus: [16.5, 0.5, 5.6],
     intro: 'ballOverFence',
+    musings: [
+      'I could throw something over the fence at it… and then THAT would be over the fence too. Nope.',
+      'What if I could get UNDER the fence? There’s that gap at the bottom.',
+      'A little car could fit through. If it could grab the ball… and bring it back…',
+      'Or something that pulls the ball to ME. Or launches it back over. Hmm.',
+    ],
   },
   {
     id: 'dog_ball',

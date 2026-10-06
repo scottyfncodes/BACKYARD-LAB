@@ -1,4 +1,5 @@
 import { PART_MAP, PARTS } from '../data/parts';
+import { CHAPTERS } from '../data/physics101';
 import { PROJECT_MAP, PROJECTS } from '../data/projects';
 import { parseBlueprint, type Blueprint } from '../sim/blueprint';
 import type { MachinePlacement } from '../sim/machine';
@@ -14,6 +15,10 @@ export interface SaveData {
   settings: { sound: boolean; sensitivity: number; hints: boolean };
   /** How many hints the player has chosen to reveal, per project. */
   hintsSeen: Record<string, number>;
+  /** The wagon the kid built in Mission 0 (null: the stock red one, for saves from before). */
+  wagon: Blueprint | null;
+  /** Mom's PHYSICS 101: found on the shelf yet, and which chapters have been opened. */
+  book: { found: boolean; read: string[] };
   session: SessionData | null;
 }
 
@@ -32,6 +37,8 @@ export interface SessionData {
   stash: Record<string, number>;
   /** Parts riding in the wagon. */
   wagon?: string[];
+  /** Mission 0: the wagon has been rolled out of the lab (it starts the mission in pieces). */
+  hasWagon?: boolean;
   /** The bench machine's last test spot, so "test again" puts it straight back. */
   spot?: TestSpot | null;
 }
@@ -49,6 +56,8 @@ export function defaultSave(): SaveData {
     creations: [],
     settings: { sound: true, sensitivity: 1, hints: true },
     hintsSeen: {},
+    wagon: null,
+    book: { found: false, read: [] },
     session: null,
   };
 }
@@ -85,7 +94,10 @@ export function parseSave(raw: string | null): SaveData {
       };
     }
   }
-  d.sandbox = j.sandbox === true || Object.keys(d.completed).length > 0;
+  // Saves from before Mission 0 existed: anyone who already solved a project has, in spirit, built the wagon.
+  if (!d.completed[FIRST_PROJECT] && Object.keys(d.completed).length > 0) d.completed[FIRST_PROJECT] = { bestTime: 0, bonuses: [] };
+  for (const id of Object.keys(d.completed)) for (const u of PROJECT_MAP[id].unlocks) if (!d.unlocked.includes(u)) d.unlocked.push(u);
+  d.sandbox = j.sandbox === true || Object.keys(d.completed).some((id) => PROJECT_MAP[id].unlocksSandbox !== false);
   if (Array.isArray(j.creations)) {
     for (const c of j.creations.slice(0, 24)) {
       const bp = parseBlueprint(c?.bp);
@@ -103,9 +115,19 @@ export function parseSave(raw: string | null): SaveData {
       if (PROJECT_MAP[k] && typeof v === 'number' && v > 0) d.hintsSeen[k] = Math.min(4, Math.floor(v));
     }
   }
+  d.wagon = j.wagon ? parseBlueprint(j.wagon) : null;
+  if (d.wagon && !d.wagon.parts.length) d.wagon = null;
+  const b = j.book as Record<string, unknown> | undefined;
+  if (b && typeof b === 'object') {
+    d.book.found = b.found === true;
+    d.book.read = strList(b.read, (s) => CHAPTER_IDS.has(s));
+    if (d.book.read.length) d.book.found = true;
+  }
   d.session = parseSession(j.session);
   return d;
 }
+
+const CHAPTER_IDS = new Set<string>(CHAPTERS.map((c) => c.id));
 
 const isNum = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 const isV3 = (x: unknown): x is [number, number, number] => Array.isArray(x) && x.length === 3 && x.every(isNum);
@@ -141,7 +163,16 @@ function parseSession(x: unknown): SessionData | null {
     }
   }
   const wagon = Array.isArray(s.wagon) ? s.wagon.filter((p): p is string => typeof p === 'string' && !!PART_MAP[p]).slice(0, 16) : [];
-  return { mode, project, bench: s.bench ? parseBlueprint(s.bench) : null, machines, stash, spot: parseSpot(s.spot), ...(wagon.length ? { wagon } : {}) };
+  return {
+    mode,
+    project,
+    bench: s.bench ? parseBlueprint(s.bench) : null,
+    machines,
+    stash,
+    spot: parseSpot(s.spot),
+    ...(wagon.length ? { wagon } : {}),
+    ...(s.hasWagon === true ? { hasWagon: true } : {}),
+  };
 }
 
 export function loadSave(store: KV | null = typeof localStorage !== 'undefined' ? localStorage : null): SaveData {
@@ -180,9 +211,21 @@ export function completeProject(save: SaveData, projectId: string, time: number,
   };
   const projects = p.unlocks.filter((id) => !save.unlocked.includes(id));
   save.unlocked.push(...projects);
-  const sandbox = !save.sandbox;
-  save.sandbox = true;
+  const sandbox = !save.sandbox && p.unlocksSandbox !== false;
+  if (sandbox) save.sandbox = true;
   return { projects, sandbox };
+}
+
+/** The kid has opened PHYSICS 101. Returns true the first time. */
+export function findBook(save: SaveData): boolean {
+  if (save.book.found) return false;
+  save.book.found = true;
+  return true;
+}
+
+/** The wagon rolled out of the lab: it is the kid's from now on, in every project. */
+export function keepWagon(save: SaveData, bp: Blueprint) {
+  save.wagon = JSON.parse(JSON.stringify(bp));
 }
 
 export function isUnlocked(save: SaveData, projectId: string): boolean {

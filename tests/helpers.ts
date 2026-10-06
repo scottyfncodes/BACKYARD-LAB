@@ -59,3 +59,15 @@ export function expectFromBin(project: ProjectDef, bp: Blueprint) {
   for (const p of bp.parts) used.set(p.def, (used.get(p.def) ?? 0) + 1);
   for (const [id, n] of used) expect(project.bin[id] ?? 0, `${project.id} bin needs ${n}× ${id}`).toBeGreaterThanOrEqual(n);
 }
+
+/** Mission 0's obvious answer: a plank on four lawnmower wheels with a broom for a handle. */
+export function wagonBlueprint(): Blueprint {
+  const b = new Builder('My Wagon');
+  const pl = b.free('plank');
+  b.on('lawn_wheel', 'hub', pl, [0.45, 0, 0.075], [0, 0, 1]);
+  b.on('lawn_wheel', 'hub', pl, [-0.45, 0, 0.075], [0, 0, 1]);
+  b.on('lawn_wheel', 'hub', pl, [0.45, 0, -0.075], [0, 0, -1]);
+  b.on('lawn_wheel', 'hub', pl, [-0.45, 0, -0.075], [0, 0, -1]);
+  b.on('broom', 'grip', pl, [-0.6, 0, 0], [-1, 0, 0]);
+  return b.bp;
+}

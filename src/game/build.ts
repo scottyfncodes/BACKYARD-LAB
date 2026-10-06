@@ -29,6 +29,7 @@ import type { CameraDirector } from './camera';
 import { generateStuds, rankInDirection, type Stud } from './studs';
 import type { Idea } from '../data/ideas';
 import { transformPoint } from '../sim/geom';
+import type { WagonNote } from '../sim/wagonbuild';
 
 export interface Stash {
   infinite: boolean;
@@ -65,6 +66,12 @@ export interface BuildHost {
   ideas(): Idea[];
   /** Parts on the bench plus parts on the shelf, for the idea checklist. */
   onBench(def: string): number;
+  /** MISSION 0: what the bench says about the wagon so far (null outside that mission). */
+  notes(bp: Blueprint): WagonNote[] | null;
+  /** What the big button says: GO FOR IT, or ROLL IT OUT for the wagon. */
+  goLabel: string;
+  /** Open PHYSICS 101, once it has been found. */
+  onBook: (() => void) | null;
 }
 
 interface MoveState {
@@ -151,6 +158,8 @@ export class BuildMode {
   private topBtns!: HTMLElement;
   private goBox!: HTMLElement;
   private trayLabel!: HTMLElement;
+  private notesEl!: HTMLElement;
+  private notesKey = '';
   /** Expanding rings where parts just clicked together. */
   private rings: { mesh: THREE.Mesh; t: number }[] = [];
   private pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number; grab?: boolean; gx?: number; gy?: number }>();
@@ -256,10 +265,12 @@ export class BuildMode {
     this.guideEl.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.goBox = h('div', { class: 'bench-go hidden' });
     this.trayLabel = h('div', { class: 'tray-label' });
-    for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar, this.goBox]) {
+    this.notesEl = h('div', { class: 'wagon-notes hidden' });
+    this.notesKey = '';
+    for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.notesEl]) {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
-    this.root.append(top, this.tray, this.trayLabel, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.cursorEl, this.cursorTag, this.guideEl);
+    this.root.append(top, this.tray, this.trayLabel, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.cursorEl, this.cursorTag, this.guideEl, this.notesEl);
     this.host.ui.appendChild(this.root);
   }
 
@@ -284,6 +295,29 @@ export class BuildMode {
     this.renderPanel();
     this.renderMarkers();
     this.renderGuide();
+    this.renderNotes();
+  }
+
+  /** MISSION 0: the bench thinking out loud about whether this is a wagon yet. */
+  private renderNotes() {
+    const notes = this.testing ? null : this.host.notes(this.bp);
+    this.root.classList.toggle('noting', !!notes);
+    if (!notes) {
+      this.notesEl.classList.add('hidden');
+      this.notesKey = '';
+      return;
+    }
+    const key = notes.map((n) => `${n.done ? 1 : 0}${n.text}`).join('|');
+    if (key !== this.notesKey) {
+      this.notesKey = key;
+      const allDone = notes.every((n) => n.done);
+      this.notesEl.replaceChildren(
+        h('div', { class: 'wn-head' }, allDone ? '🛒 THAT’S A WAGON' : '🛒 IS IT A WAGON YET?'),
+        ...notes.map((n) => h('div', { class: `wn ${n.done ? 'done' : ''}` }, h('i', {}, n.done ? '✓' : ''), n.text)),
+        ...(allDone ? [h('div', { class: 'wn ok' }, h('i', {}, '→'), `Tap ${this.host.goLabel} to see if it rolls.`)] : []),
+      );
+    }
+    this.notesEl.classList.remove('hidden');
   }
 
   private escape(s: string) {
@@ -301,6 +335,8 @@ export class BuildMode {
       }
       const hints = this.host.onHints;
       if (hints && !this.guide) b.push(btn('💡', () => hints(), 'small hint-btn'));
+      const book = this.host.onBook;
+      if (book) b.push(btn('📖', () => book(), 'small book-btn'));
       b.push(btn('✕', () => this.leave(), 'small'));
     }
     this.topBtns.replaceChildren(...b);
@@ -315,7 +351,7 @@ export class BuildMode {
     const b: HTMLElement[] = [
       btn('⚙ Try it here', () => this.test(), 'small'),
       btn('📍 Place it myself', () => this.done(), 'small'),
-      btn('🚀 GO FOR IT', () => this.testOut(), 'go test-btn'),
+      btn(this.host.goLabel, () => this.testOut(), 'go test-btn'),
     ];
     this.goBox.replaceChildren(...b);
   }
