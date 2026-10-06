@@ -87,6 +87,8 @@ export const WORLD = {
     { kind: 'box', pos: [-11, 0.01, -5], half: [3, 0.01, 4], mat: 'concrete', vis: 'garage_floor' },
     { id: 'workbench', kind: 'box', pos: [-11, 0.39, -5], half: [0.75, 0.39, 0.4], mat: 'wood', vis: 'workbench' },
     { kind: 'box', pos: [-13.75, 0.9, -5], half: [0.25, 0.02, 1.6], mat: 'wood', vis: 'shelf' },
+    // Mom's old PHYSICS 101 textbook, on the end of the shelf nearest the door.
+    { id: 'physics_book', kind: 'box', pos: [-13.72, 0.955, -3.65], half: [0.11, 0.035, 0.14], rotY: -12, mat: 'wood', vis: 'book' },
     // fences
     fenceX(EAST_FENCE_X, -10, -4.2),
     { ...fenceX(EAST_FENCE_X, -4.2, -3.0, 0, FENCE_H, 'gate', 'gate'), removable: true },
@@ -189,6 +191,7 @@ export const LOOK_HINTS: Record<string, string> = {
   trunk: 'The big tree. The treehouse is up there.',
   house: 'Home. Mom said no building stuff inside.',
   garage_back: 'The lab. Everything useful ends up in here eventually.',
+  physics_book: 'PHYSICS 101. Mom’s old college textbook. Probably boring. Probably useful.',
 };
 
 export function zone(id: string): ZoneDef {

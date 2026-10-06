@@ -60,7 +60,8 @@ describe('projects: a problem, a goal and a box of parts', () => {
 
   it('success is about the world, never about which parts were used', () => {
     const tags = (c: Cond): string[] => ('tag' in c ? [c.tag] : 'of' in c ? c.of.flatMap(tags) : 'cond' in c ? tags(c.cond) : []);
-    for (const p of PROJECTS) for (const t of tags(p.success)) expect(['target', 'player']).toContain(t);
+    // The target, the kid, and the wagon (Mission 0's deliverable) are the only things in the world a goal may name.
+    for (const p of PROJECTS) for (const t of tags(p.success)) expect(['target', 'player', 'wagon']).toContain(t);
   });
 
   it('every project can be reached from the first one', () => {
@@ -78,7 +79,9 @@ describe('projects: a problem, a goal and a box of parts', () => {
       const at = toV(sim.player!.translation());
       expect(Math.hypot(at.x - p.site.pos[0], at.z - p.site.pos[2]), p.id).toBeLessThan(0.3);
       expect(inZone(at, 'home_yard'), p.id).toBe(true);
-      const target = toV(sim.itemByTag('target')!.rb.translation());
+      // Mission 0 has no target item: the problem is the junk pile the intro looks at.
+      const t = sim.itemByTag('target');
+      const target = t ? toV(t.rb.translation()) : { x: p.focus[0], z: p.focus[2] };
       const face = { x: -Math.sin(p.site.yaw), z: -Math.cos(p.site.yaw) };
       const to = { x: target.x - at.x, z: target.z - at.z };
       const cos = (face.x * to.x + face.z * to.z) / Math.hypot(to.x, to.z);

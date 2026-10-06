@@ -9,6 +9,8 @@ export interface WorldQuery {
   held(tag: string): boolean;
   touched(tag: string): boolean;
   snagged(tag: string): boolean;
+  /** How many things are riding in the wagon (0 without one). */
+  wagonLoad(): number;
 }
 
 export function outOfBounds(p: { x: number; y: number; z: number }): boolean {
@@ -50,6 +52,8 @@ export function evalCond(c: Cond, q: WorldQuery): boolean {
     }
     case 'timeUnder':
       return q.time < c.seconds;
+    case 'wagonLoad':
+      return q.wagonLoad() >= c.min;
     case 'all':
       return c.of.every((x) => evalCond(x, q));
     case 'any':

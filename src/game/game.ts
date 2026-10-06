@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Audio } from '../audio/audio';
 import { getPart, PART_MAP, PARTS } from '../data/parts';
+import { CHAPTER_MAP, CHAPTERS, type ChapterId } from '../data/physics101';
 import { PROJECT_MAP, PROJECTS, STAGES, type ProjectDef } from '../data/projects';
 import { EAST_FENCE_X, inZone, LOOK_HINTS, WORLD } from '../data/world';
 import { buildEnvironment, type Environment } from '../render/environment';
@@ -13,6 +14,7 @@ import type { SimEvent } from '../sim/events';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
 import { GROUP, groups, toV } from '../sim/physics';
 import { emptyInput, PLAYER, Simulation, WAGON, type Item, type SimInput } from '../sim/simulation';
+import { wagonCheck } from '../sim/wagonbuild';
 import { partThumb } from '../render/thumbs';
 import { ActionBar, btn, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
 import { BuildMode, type Stash } from './build';
@@ -21,8 +23,9 @@ import { autoSpot, machineFits, type Area } from './autospot';
 import { analyze, TestProbe, type TestReport } from './diagnostics';
 import { Input } from './input';
 import { RunJournal } from './journal';
+import { PhysicsBook } from './physicsbook';
 import { Replay } from './replay';
-import { completeProject, discover, loadSave, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
+import { completeProject, discover, findBook, keepWagon, loadSave, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
 
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
@@ -81,6 +84,13 @@ export class Game {
   private idleNudged = false;
   private nudgePick: string | null = null;
   private wagonHinted = false;
+  /** Mission 0: the first pull of the wagon the kid built. */
+  private wagonCelebrated = false;
+  /** The kid thinking out loud after a briefing. */
+  private musingTimers: number[] = [];
+  /** Mom's PHYSICS 101. */
+  private book!: PhysicsBook;
+  private bookBtn!: HTMLElement;
 
   // UI
   ui: HTMLElement;
@@ -118,6 +128,12 @@ export class Game {
     this.toasts = new Toasts(ui);
     this.thought = new Thought(ui);
     this.modal = new Modal(ui);
+    this.book = new PhysicsBook({
+      modal: this.modal,
+      book: this.save.book,
+      onChange: () => this.persist(),
+      play: (snd) => this.audio.play(snd as Parameters<Audio['play']>[0]),
+    });
     this.buildHud();
     this.build = new BuildMode(this.buildHost());
     window.addEventListener('resize', () => this.resize());
@@ -141,7 +157,9 @@ export class Game {
   private newSim(project: ProjectDef | null, started = true) {
     this.view?.root.removeFromParent();
     this.sim?.free();
-    this.sim = new Simulation({ project: started ? project : null, gateOpen: !project });
+    // Mission 0 starts with no wagon: the kid builds it. Everywhere else, theirs rolls along (or the stock red one, for older saves).
+    const noWagon = started && project?.deliverable === 'wagon';
+    this.sim = new Simulation({ project: started ? project : null, gateOpen: !project, wagon: !noWagon, wagonBp: this.save.wagon });
     if (!started && project) {
       // Title-screen backdrop: the prop sits where it will be.
       for (const s of project.props) this.sim.spawnItem(s);
@@ -205,6 +223,13 @@ export class Game {
       creations: () => this.save.creations,
       ideas: () => ideasFor(this.sandbox ? null : this.projectId),
       onBench: (d: string) => (this.stash.get(d) ?? 0) + this.build.bp.parts.filter((p) => p.def === d).length,
+      notes: (bp: Blueprint) => (this.wagonMission() && !this.sim.wagon ? wagonCheck(bp).notes : null),
+      get goLabel() {
+        return self.wagonMission() && !self.sim.wagon ? '🛒 ROLL IT OUT' : '🚀 GO FOR IT';
+      },
+      get onBook() {
+        return self.save.book.found ? () => self.openBook() : null;
+      },
       saveCreation: (bp: Blueprint) => {
         this.save.creations.unshift({ name: bp.name, bp: clone(bp), savedAt: Date.now() });
         this.save.creations = this.save.creations.slice(0, 24);
@@ -227,7 +252,8 @@ export class Game {
     this.powerChip = h('div', { class: 'chip hidden' });
     this.menuBtn = btn('☰', () => this.showMenu(), 'small round');
     this.hintBtn = btn('💡', () => this.showHints(), 'small round hint-btn');
-    this.hudTop = h('div', { class: 'topbar' }, this.projectChip, this.powerChip, h('div', { class: 'spacer' }), this.hintBtn, this.menuBtn);
+    this.bookBtn = btn('📖', () => this.openBook(), 'small round book-btn hidden');
+    this.hudTop = h('div', { class: 'topbar' }, this.projectChip, this.powerChip, h('div', { class: 'spacer' }), this.bookBtn, this.hintBtn, this.menuBtn);
     this.resultsEl = h('div', { class: 'results hidden' });
     this.resultsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.ui.append(this.resultsEl);
@@ -268,7 +294,8 @@ export class Game {
       row.append(btn(`▶ Play — ${next.title}`, () => this.startProject(next.id), 'go'));
     }
     row.append(btn('📋 Projects', () => this.showProjects()));
-    row.append(btn(s.sandbox ? '🧪 Sandbox' : '🔒 Sandbox (finish a project)', () => (s.sandbox ? this.startSandbox() : this.audio.play('error'))));
+    const opensSandbox = PROJECTS.find((p) => p.unlocksSandbox !== false && !s.completed[p.id]);
+    row.append(btn(s.sandbox ? '🧪 Sandbox' : `🔒 Sandbox (solve ${opensSandbox?.title ?? 'a project'} first)`, () => (s.sandbox ? this.startSandbox() : this.audio.play('error'))));
     row.append(btn('📓 Lab Notebook', () => this.showNotebook()));
     row.append(btn('⚙ Settings', () => this.showSettings(() => this.showTitle())));
     content.push(row);
@@ -313,6 +340,8 @@ export class Game {
       h('h2', {}, '📓 Lab Notebook'),
       h('p', {}, `Junk discovered: ${found}/${total}`),
       h('p', {}, `Bonus stars: ${tb.earned}/${tb.possible}`),
+      h('p', {}, s.book.found ? `📖 Physics 101: ${s.book.read.length}/${CHAPTERS.length} chapters opened` : '📖 Physics 101: somewhere in the lab…'),
+      ...(s.wagon ? [h('p', {}, `🛒 The wagon: ${s.wagon.parts.length} parts, built by me`)] : []),
       ...stages,
       h('div', { class: 'row' }, btn('Back', back)),
     ]);
@@ -375,6 +404,8 @@ export class Game {
     const p = PROJECT_MAP[id];
     if (!p) return;
     this.modal.hide();
+    this.clearMusings();
+    this.wagonCelebrated = false;
     this.sandbox = false;
     this.projectId = id;
     const keep = !fresh ? null : this.save.session?.mode === 'project' && this.save.session.project === id ? this.save.session : null;
@@ -427,6 +458,8 @@ export class Game {
     if (s.bench) this.bench = s.bench;
     this.benchSpot = s.spot ?? null;
     for (const m of s.machines) this.sim.addMachine(m.bp, m.placement);
+    // Mission 0: the wagon had already rolled out of the lab.
+    if (s.hasWagon && !this.sim.wagon) this.sim.addWagon(this.save.wagon);
     // Back in the wagon, taken from wherever they were lying.
     const w = this.sim.wagon;
     if (w) {
@@ -470,6 +503,7 @@ export class Game {
       machines,
       stash: Object.fromEntries(this.stash),
       wagon: this.sim.wagon?.load.map((s) => s.part) ?? [],
+      hasWagon: !!this.sim.wagon,
       spot: this.benchSpot,
     };
   }
@@ -615,6 +649,7 @@ export class Game {
       more.push(btn('📐 Show me a whole machine, step by step', () => this.guideMe(), 'small'));
     }
     const back = this.mode === 'build' ? 'Back to the bench' : 'Back to it';
+    if (this.save.book.found) more.push(btn('📖 Physics 101', () => this.openBook(), 'small book-btn'));
     this.modal.show(
       [
         h('div', { class: 'label' }, '💭 WHAT ARE YOU THINKING?'),
@@ -648,11 +683,78 @@ export class Game {
     this.audio.unlock();
     this.enterExplore();
     this.idleNudged = false;
-    if (this.save.settings.hints && this.projectId && !Object.keys(this.save.completed).length) {
-      setTimeout(() => this.mode === 'explore' && this.thought.say('My parts bin is in the lab. Tap 🔧 BENCH to start building.', 5000), 900);
-      setTimeout(() => this.input.touchMode && this.stickHint.classList.remove('hidden'), 100);
-      setTimeout(() => this.stickHint.classList.add('hidden'), 9000);
+    const p = this.projectId ? PROJECT_MAP[this.projectId] : null;
+    if (this.save.settings.hints && p && !this.save.completed[p.id]) {
+      // Thinking out loud: a chain of "what ifs", then where the parts are.
+      const lines = [...(p.musings ?? [])];
+      if (!Object.keys(this.save.completed).length || p.deliverable === 'wagon') lines.push('My parts bin is in the lab. Tap 🔧 BENCH to start building.');
+      this.clearMusings();
+      lines.forEach((line, i) => {
+        this.musingTimers.push(window.setTimeout(() => this.mode === 'explore' && !this.modal.open && this.thought.say(line, 4200), 900 + i * 4600));
+      });
+      if (!Object.keys(this.save.completed).length) {
+        setTimeout(() => this.input.touchMode && this.stickHint.classList.remove('hidden'), 100);
+        setTimeout(() => this.stickHint.classList.add('hidden'), 9000);
+      }
     }
+  }
+
+  private clearMusings() {
+    for (const t of this.musingTimers) clearTimeout(t);
+    this.musingTimers = [];
+  }
+
+  // ================================================================== PHYSICS 101
+
+  /** Open Mom's book: at the contents, or straight at the chapter a test result points to. */
+  openBook(chapter: ChapterId | null = null) {
+    this.input.unlockPointer();
+    this.clearMusings();
+    if (findBook(this.save)) {
+      this.toasts.show('📖 Found: <b>PHYSICS 101</b>. Mom’s old textbook.', 'new', 3200);
+      this.audio.play('discover');
+      this.persist();
+    }
+    if (this.running) this.resetRun();
+    this.book.open(chapter, () => this.modal.hide());
+  }
+
+  // ================================================================== MISSION 0: the wagon
+
+  private wagonMission(): boolean {
+    return !!this.projectId && !this.sandbox && PROJECT_MAP[this.projectId].deliverable === 'wagon';
+  }
+
+  /**
+   * ROLL IT OUT: in Mission 0, the thing on the bench is not a machine to test
+   * but the wagon itself. If the bench agrees it is one, it becomes the kid's
+   * wagon for good; if not, the bench says what is missing and keeps them there.
+   */
+  private tryRollOutWagon(bp: Blueprint): boolean {
+    if (!this.wagonMission() || this.sim.wagon) return false;
+    const c = wagonCheck(bp);
+    if (!c.ok) {
+      const todo = c.notes.find((n) => !n.done);
+      this.toasts.show(`Not a wagon yet. ${todo?.text ?? ''}`, '', 3600);
+      this.audio.play('hmm');
+      return true;
+    }
+    this.leaveBench();
+    this.bench = newBlueprint();
+    this.benchSpot = null;
+    bp.name = 'My Wagon';
+    keepWagon(this.save, bp);
+    // It rolls out of the lab and parks by the door, handle toward the yard, kid at the handle.
+    const at = { pos: WORLD.wagon.pos, yaw: -90 };
+    this.sim.addWagon(clone(bp), at);
+    this.sim.teleportPlayer([at.pos[0] + 2.2, 0, at.pos[2]], Math.PI / 2);
+    this.enterExplore();
+    this.pitch = -0.25;
+    this.audio.play('attach', new THREE.Vector3(...at.pos));
+    this.fx.emit('dust', new THREE.Vector3(at.pos[0], 0.05, at.pos[2]), 16);
+    this.thought.say('Okay. Moment of truth. Does it roll? Grab the handle: 🛒 PULL.', 5500);
+    this.persist();
+    return true;
   }
 
   // ================================================================== explore
@@ -753,6 +855,8 @@ export class Game {
       }
     } else if (look?.kind === 'machine' && look.machine.state === 'frozen' && look.machine.id !== this.testMachine) {
       a.push({ id: 'pickm', label: `✊ PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
+    } else if (look?.kind === 'static' && look.id === 'physics_book') {
+      a.push({ id: 'read', label: `📖 READ${k('E')}`, cls: 'primary', onPress: () => this.openBook() });
     } else if (this.nearBench()) {
       a.push({ id: 'build', label: `🔧 BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
     } else if (this.nearGateFromOutside()) {
@@ -807,7 +911,8 @@ export class Game {
       const load = this.sim.wagon.load;
       key = `w${load.length}`;
       const what = load.length ? load.map((s) => getPart(s.part).name).join(', ') : 'Empty. Load it up and haul it back to the lab.';
-      html = `<b>Wagon (${load.length}/${WAGON.capacity})</b><span>${what}</span><div class="traits"><span class="trait">${Math.round(this.sim.wagonLoadMass())}/${WAGON.maxLoad} kg</span></div>`;
+      const wname = this.sim.wagon.bp ? this.sim.wagon.bp.name : 'Wagon';
+      html = `<b>${wname} (${load.length}/${WAGON.capacity})</b><span>${what}</span><div class="traits"><span class="trait">${Math.round(this.sim.wagonLoadMass())}/${WAGON.maxLoad} kg</span></div>`;
     } else if (look?.kind === 'machine') {
       key = `m${look.machine.id}`;
       html = `<b>${look.machine.bp.name}</b><span>${blueprintMass(look.machine.bp).toFixed(1)} kg of pure genius</span>`;
@@ -874,6 +979,14 @@ export class Game {
       return;
     }
     this.sim.hitchWagon(true);
+    if (this.wagonMission() && w.bp && !this.wagonCelebrated) {
+      this.wagonCelebrated = true;
+      this.wagonHinted = true;
+      this.audio.play('discover');
+      this.fx.emit('confetti', toV(w.rb.translation()).add(new THREE.Vector3(0, 0.6, 0)), 30);
+      this.thought.say('IT ROLLS. I built that. Now: load 3 things from the junk pile and haul them into the lab.', 6000);
+      return;
+    }
     if (this.save.settings.hints && !this.wagonHinted) {
       this.wagonHinted = true;
       this.thought.say('Now I can haul a whole load of junk back to the lab.', 3500);
@@ -937,6 +1050,7 @@ export class Game {
     this.absorbBench();
     this.unloadWagon();
     this.hideResults();
+    this.clearMusings();
     this.mode = 'build';
     this.input.unlockPointer();
     this.input.enabled = false;
@@ -957,6 +1071,7 @@ export class Game {
   }
 
   private benchDone(bp: Blueprint) {
+    if (this.tryRollOutWagon(bp)) return;
     this.leaveBench();
     this.bench = newBlueprint();
     this.benchSpot = null;
@@ -984,6 +1099,7 @@ export class Game {
    * down at the problem (or wherever it was tested last), facing it, and starts.
    */
   private goForIt(bp: Blueprint) {
+    if (this.tryRollOutWagon(bp)) return;
     const a = this.area();
     const last = this.benchSpot && machineFits(this.sim, bp, this.benchSpot.placement) ? this.benchSpot : null;
     const placement = last?.placement ?? autoSpot(this.sim, bp, a);
@@ -1309,7 +1425,14 @@ export class Game {
       h('div', { class: 'label' }, '👀 WHAT HAPPENED'),
       h('p', { class: 'obs' }, r.observation),
     ];
+    // The clues: what the probe measured, so a test that didn't work still says something exact.
+    if (r.facts.length && r.mood !== 'worked') parts.push(h('ul', { class: 'facts' }, ...r.facts.map((f) => h('li', {}, f))));
     if (r.tryNext) parts.push(h('p', { class: 'try' }, `💭 ${r.tryNext}`));
+    // "Why didn't that work?" has a page in Mom's book.
+    const bookBtn =
+      r.chapter && r.mood !== 'worked'
+        ? btn(this.save.book.found ? `📖 ${CHAPTER_MAP[r.chapter].title}` : '📖 Maybe Mom’s physics book knows?', () => this.openBook(r.chapter), 'small book-link')
+        : null;
     this.resultsEl.replaceChildren(
       ...parts,
       h(
@@ -1322,6 +1445,7 @@ export class Game {
         canTweak ? btn('↺ Retry', () => this.retry(), 'small') : null,
         r.fix === 'turn' && canTweak ? btn(`↻ Turn it toward the ${this.projectId ? PROJECT_MAP[this.projectId].target : 'target'}`, () => this.turnMachine(true), 'small primary') : null,
         canTweak ? btn('🔧 Back to build', () => this.tweakMachine(), r.fix ? 'small' : 'small primary') : null,
+        bookBtn,
       ),
     );
     this.resultsEl.classList.remove('hidden');
@@ -1529,15 +1653,16 @@ export class Game {
     this.input.unlockPointer();
     setTimeout(() => {
       const nextId = PROJECTS.find((x) => this.save.unlocked.includes(x.id) && !this.save.completed[x.id])?.id;
+      const wagon = p.deliverable === 'wagon';
       const content: Node[] = [
         h('div', { class: 'muted' }, `${p.title} · solved in ${fmtTime(time)}`),
-        h('h1', {}, byMachine ? 'I BUILT THAT.' : 'GOT IT!'),
-        h('p', {}, byMachine ? `The ${p.target} is back, and a machine you made did it.` : `The ${p.target} is back. However you did it, it counts.`),
+        h('h1', {}, byMachine || wagon ? 'I BUILT THAT.' : 'GOT IT!'),
+        h('p', {}, wagon ? 'The wagon works. It’s mine now: it rolls along behind me in every project from here on.' : byMachine ? `The ${p.target} is back, and a machine you made did it.` : `The ${p.target} is back. However you did it, it counts.`),
         ...bonuses.map((b) => h('div', { class: `bonus ${b.earned ? 'got' : 'miss'}` }, h('i', {}, b.earned ? '★' : ''), b.def.label)),
       ];
       if (unlocked.sandbox) content.push(h('p', {}, '🧪 Sandbox unlocked! Every part there is, as many as you want.'));
       if (unlocked.projects.length) content.push(h('p', {}, `New: ${unlocked.projects.map((id) => PROJECT_MAP[id].title).join(', ')}`));
-      content.push(h('p', { class: 'muted' }, 'Wait. What ELSE can I build?'));
+      content.push(h('p', { class: 'muted' }, wagon ? 'Build something. Test it. Use it. Now… what else needs building?' : 'Wait. What ELSE can I build?'));
       const row = h('div', { class: 'row' });
       if (nextId) row.append(btn(`▶ ${PROJECT_MAP[nextId].title}`, () => this.startProject(nextId), 'go'));
       row.append(btn('🧪 Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
@@ -1610,6 +1735,9 @@ export class Game {
         break;
       case 'h':
         this.showHints();
+        break;
+      case 'k':
+        if (this.save.book.found) this.openBook();
         break;
       case 'v':
         if (!this.running && this.replay.available) this.startReplay();
@@ -1825,6 +1953,7 @@ export class Game {
       }
     }
     this.hintBtn.classList.toggle('hidden', !this.projectId || this.sandbox);
+    this.bookBtn.classList.toggle('hidden', !this.save.book.found);
     void inZone;
   }
 }

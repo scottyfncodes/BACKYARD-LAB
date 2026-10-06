@@ -748,3 +748,112 @@ body.has-results .actions.right, body.has-results .thought { display: none !impo
 .stage-ideas { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .stage-ideas .concept { font-size: 10px; padding: 2px 8px; }
 .stage.locked .stage-ideas .concept { background: #8a7a66; }
+
+/* ================================================================ Mission 0: wagon notes on the bench */
+.wagon-notes {
+  position: fixed;
+  left: calc(10px + var(--safe-l));
+  top: calc(64px + var(--safe-t));
+  width: min(300px, calc(100vw - 20px - var(--safe-l) - var(--safe-r)));
+  background: #fff7d1;
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  padding: 6px 10px 8px;
+  box-shadow: var(--shadow);
+  transform: rotate(-0.8deg);
+  z-index: 1;
+}
+.wagon-notes .wn-head { font-size: 11px; font-weight: 900; letter-spacing: 0.08em; opacity: 0.7; margin-bottom: 2px; }
+.wagon-notes .wn { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; font-weight: 800; line-height: 1.2; margin: 3px 0; }
+.wagon-notes .wn i { font-style: normal; flex: 0 0 18px; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--ink); background: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+.wagon-notes .wn.done i { background: var(--green); color: #fff; }
+.wagon-notes .wn.done { opacity: 0.7; }
+.wagon-notes .wn.ok { color: #1f6b35; }
+.build-ui.noting .build-status { top: calc(200px + var(--safe-t)); }
+@media (max-height: 480px) {
+  .wagon-notes { width: min(260px, 40vw); top: calc(58px + var(--safe-t)); padding: 4px 8px 6px; }
+  .wagon-notes .wn { font-size: 12px; margin: 2px 0; }
+}
+
+/* ================================================================ test results: facts and the book */
+.results .facts { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0 0; padding: 0; list-style: none; }
+.results .facts li { font-size: 12px; font-weight: 800; opacity: 0.75; }
+.results .facts li::before { content: '📏 '; }
+.results .btn.book-link { background: #e9eef8; }
+
+/* ================================================================ PHYSICS 101 */
+.book-btn { background: #e9eef8; }
+.card.book {
+  background: #fbf3dc;
+  background-image: repeating-linear-gradient(transparent 0 27px, rgba(47, 36, 24, 0.08) 27px 28px);
+  border-color: #2b4a7a;
+  box-shadow: 0 8px 0 #1d3558, inset 8px 0 0 -4px rgba(43, 74, 122, 0.25);
+  transform: rotate(0.4deg);
+  max-width: 560px;
+}
+.card.book::before { background: #cfd9ea; transform: rotate(2deg); }
+.book-cover { text-align: center; padding: 8px 0 4px; position: relative; }
+.book-title { font-size: 40px; font-weight: 1000; letter-spacing: 0.06em; color: #2b4a7a; line-height: 1; }
+.book-sub { font-size: 15px; font-weight: 800; opacity: 0.7; margin-top: 4px; }
+.book-sticky, .book-margin {
+  font-family: 'Bradley Hand', 'Segoe Print', 'Comic Sans MS', 'Marker Felt', cursive;
+  font-weight: 700;
+}
+.book-sticky {
+  display: inline-block;
+  margin-top: 10px;
+  background: var(--tape);
+  padding: 6px 14px;
+  transform: rotate(-3deg);
+  font-size: 16px;
+  line-height: 1.2;
+  box-shadow: 2px 3px 0 rgba(47, 36, 24, 0.25);
+  color: #4a3a22;
+}
+.book-toc { display: flex; flex-direction: column; gap: 6px; }
+.btn.book-row { text-align: left; display: flex; justify-content: space-between; align-items: center; white-space: normal; gap: 8px; min-height: 48px; padding: 6px 12px; }
+.book-ch { display: flex; flex-direction: column; }
+.book-ch b { font-size: 16px; }
+.book-ch small { font-size: 12px; font-weight: 700; opacity: 0.7; }
+.book-tick { color: var(--green); font-size: 20px; }
+.book-later { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; opacity: 0.5; font-size: 13px; padding: 2px 6px; border-bottom: 2px dashed rgba(47, 36, 24, 0.25); }
+.book-later b { font-size: 14px; }
+.book-later small { font-weight: 700; text-align: right; }
+.card p.book-note { font-size: 13px; font-style: italic; opacity: 0.75; margin-top: 12px; }
+.book-head { display: flex; justify-content: space-between; align-items: center; }
+.book-head .btn.close { min-height: 36px; min-width: 36px; padding: 0; font-size: 14px; }
+.card h2.book-h { font-size: 30px; color: #2b4a7a; margin: 2px 0 4px; border-bottom: 3px solid #2b4a7a; padding-bottom: 2px; }
+.card p.book-idea { font-size: 17px; line-height: 1.4; }
+.book-lab { background: #fff; border: 3px solid var(--ink); border-radius: 14px; padding: 8px 10px 6px; }
+.book-fig { width: 100%; height: auto; display: block; }
+.card p.book-caption { font-size: 15px; font-weight: 800; line-height: 1.3; margin: 6px 0 8px; min-height: 2.6em; color: #1f3a66; }
+.book-slider { display: block; margin: 6px 0; font-size: 13px; font-weight: 800; }
+.book-slider span { display: flex; justify-content: space-between; gap: 8px; }
+.book-slider b { color: #2b4a7a; white-space: nowrap; }
+.book-slider input[type='range'] { width: 100%; margin: 2px 0 0; accent-color: #2b4a7a; height: 28px; }
+.book-choices { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.book-choices .btn.on { background: var(--tape); transform: translateY(2px); }
+.book-words { margin: 12px 0 0; font-size: 13px; font-weight: 700; line-height: 1.35; }
+.book-words div { padding: 2px 0; border-bottom: 1px dashed rgba(47, 36, 24, 0.2); }
+.book-words b { color: #2b4a7a; }
+.book-margin {
+  margin: 12px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid #b03a2e;
+  color: #8a2e24;
+  font-size: 16px;
+  line-height: 1.25;
+  transform: rotate(-0.6deg);
+}
+.book-margin::before { content: 'Mom: '; font-weight: 900; }
+.card p.book-try { font-size: 15px; background: #fff1b8; border-radius: 10px; padding: 8px 10px; margin-top: 10px; }
+.book-math { margin-top: 10px; font-size: 13px; }
+.book-math summary { font-weight: 900; cursor: pointer; opacity: 0.75; }
+.book-formula { margin: 6px 0; padding: 4px 8px; background: rgba(255, 255, 255, 0.6); border-radius: 8px; }
+.book-formula code { display: block; font-weight: 900; font-size: 14px; }
+.book-formula small { font-weight: 700; opacity: 0.75; }
+@media (max-height: 480px) {
+  .book-title { font-size: 30px; }
+  .card h2.book-h { font-size: 24px; }
+  .card p.book-idea { font-size: 15px; }
+}

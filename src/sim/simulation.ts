@@ -4,6 +4,7 @@ import type { ProjectDef } from '../data/projects';
 import { inZone, WORLD, type SpawnDef } from '../data/world';
 import type { Blueprint } from './blueprint';
 import type { SimEvent } from './events';
+import { wagonFrame, type WagonFrame } from './wagonbuild';
 import { composePose, DEG, eulerDeg, invertPose, partArea, shapeVolume, transformPoint, v3, type Pose } from './geom';
 import { criticalDamping, stableStiffness } from './links';
 import { MachineInstance, type DynTarget, type MachineHost, type MachinePlacement, type RCInput } from './machine';
@@ -61,12 +62,21 @@ export interface Wagon {
   /** What's riding in the bed (taken out of the world, respawnable). */
   load: SpawnDef[];
   hitched: boolean;
+  /** The kid's own design (Mission 0), or null for the little red wagon. */
+  bp: Blueprint | null;
+  frame: WagonFrame | null;
+  /** Bed collider half extents; local -Z is the handle end. */
+  half: V3;
+  /** Handle length: kid centre to wagon centre. */
+  tow: number;
 }
 
 export interface SimOptions {
   player?: boolean;
   /** Defaults to on whenever there is a player. */
   wagon?: boolean;
+  /** A wagon the kid built, instead of the stock one. */
+  wagonBp?: Blueprint | null;
   junk?: boolean;
   project?: ProjectDef | null;
   gateOpen?: boolean;
@@ -106,7 +116,7 @@ export class Simulation implements MachineHost {
     this.physics = new Physics();
     for (const s of WORLD.solids) this.physics.addSolid(s);
     if (opts.player !== false) this.createPlayer();
-    if (opts.wagon ?? opts.player !== false) this.createWagon();
+    if (opts.wagon ?? opts.player !== false) this.createWagon(opts.wagonBp ?? null);
     if (opts.junk !== false) for (const j of WORLD.junk) this.spawnItem(j);
     if (opts.project) this.startProject(opts.project);
     if (opts.gateOpen) this.openGate();
@@ -211,6 +221,7 @@ export class Simulation implements MachineHost {
       time: this.projectTime,
       pos: (tag) => {
         if (tag === 'player') return this.player ? toV(this.player.translation()) : null;
+        if (tag === 'wagon') return this.wagon ? toV(this.wagon.rb.translation()) : null;
         const it = this.itemByTag(tag);
         return it ? toV(it.rb.translation()) : null;
       },
@@ -221,6 +232,7 @@ export class Simulation implements MachineHost {
       held: (tag) => this.carried?.item.tag === tag,
       touched: (tag) => !!this.itemByTag(tag)?.touched,
       snagged: (tag) => !!this.itemByTag(tag)?.snag,
+      wagonLoad: () => this.wagon?.load.length ?? 0,
     };
   }
 
@@ -314,7 +326,7 @@ export class Simulation implements MachineHost {
     // A wagon being pulled comes along, trailing behind.
     const w = this.wagon;
     if (w?.hitched) {
-      const back = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw)).multiplyScalar(WAGON.tow);
+      const back = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw)).multiplyScalar(w.tow);
       const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), this.yaw);
       w.rb.setTranslation({ x: p[0] + back.x, y: p[1] + 0.01, z: p[2] + back.z }, true);
       w.rb.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
@@ -491,22 +503,43 @@ export class Simulation implements MachineHost {
 
   // ---------------------------------------------------------------- wagon
 
-  private createWagon() {
-    const s = WORLD.wagon;
-    const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), s.yaw * DEG);
+  private createWagon(bp: Blueprint | null = null, at: { pos: V3; yaw: number } = WORLD.wagon) {
+    const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), at.yaw * DEG);
     const rb = this.physics.world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(s.pos[0], s.pos[1] + 0.01, s.pos[2])
+        .setTranslation(at.pos[0], at.pos[1] + 0.01, at.pos[2])
         .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
         .lockRotations()
         .setLinearDamping(1.5),
     );
-    const [hx, hy, hz] = WAGON.half;
-    const cd = RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(0, hy, 0).setMass(WAGON.mass).setFriction(0.5).setRestitution(0.05).setCollisionGroups(G_DYNAMIC);
+    const frame = bp ? wagonFrame(bp) : null;
+    const half: V3 = frame ? frame.half : WAGON.half;
+    const [hx, hy, hz] = half;
+    const mass = bp ? Math.max(WAGON.mass, bp.parts.reduce((m, p) => m + getPart(p.def).mass, 0)) : WAGON.mass;
+    const cd = RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(0, hy, 0).setMass(mass).setFriction(0.5).setRestitution(0.05).setCollisionGroups(G_DYNAMIC);
     const collider = this.physics.world.createCollider(cd, rb);
-    this.physics.tags.set(collider.handle, { owner: { kind: 'wagon' }, mat: 'metal' });
+    this.physics.tags.set(collider.handle, { owner: { kind: 'wagon' }, mat: bp ? 'wood' : 'metal' });
     this.bodyOwner.set(rb.handle, { kind: 'wagon' });
-    this.wagon = { rb, collider, load: [], hitched: false };
+    this.wagon = { rb, collider, load: [], hitched: false, bp, frame, half, tow: frame?.tow ?? WAGON.tow };
+  }
+
+  /**
+   * MISSION 0: the kid's own wagon rolls out of the lab. It is towed, loaded
+   * and tipped exactly like the stock one; only its shape and looks are theirs.
+   */
+  addWagon(bp: Blueprint | null, at: { pos: V3; yaw: number } = WORLD.wagon): Wagon {
+    this.removeWagon();
+    this.createWagon(bp, at);
+    return this.wagon!;
+  }
+
+  removeWagon() {
+    const w = this.wagon;
+    if (!w) return;
+    this.physics.tags.delete(w.collider.handle);
+    this.bodyOwner.delete(w.rb.handle);
+    this.physics.world.removeRigidBody(w.rb);
+    this.wagon = null;
   }
 
   resetWagon() {
@@ -581,7 +614,7 @@ export class Simulation implements MachineHost {
     const q = toQ(w.rb.rotation());
     const back = new Vector3(0, 0, 1).applyQuaternion(q);
     const side = new Vector3(1, 0, 0).applyQuaternion(q);
-    const p = toV(w.rb.translation()).addScaledVector(back, WAGON.half[2] + 0.45);
+    const p = toV(w.rb.translation()).addScaledVector(back, w.half[2] + 0.45);
     const load = this.emptyWagon();
     load.forEach((s, i) => {
       const at = p.clone().addScaledVector(side, ((i % 3) - 1) * 0.35).addScaledVector(back, Math.floor(i / 3) * 0.35);
@@ -622,22 +655,24 @@ export class Simulation implements MachineHost {
     const d = new Vector3(kid.x - p.x, 0, kid.z - p.z);
     const len = d.length();
     // Snagged on something, or the kid climbed away: the handle slips out of their hand.
-    if (len > WAGON.tow + 1.4 || kid.y - p.y > 2.2) {
+    if (len > w.tow + 1.4 || kid.y - p.y > 2.2) {
       this.hitchWagon(false);
       return;
     }
     const dir = len > 1e-4 ? d.divideScalar(len) : new Vector3(0, 0, -1).applyQuaternion(toQ(rb.rotation()));
     // Trail the kid at handle length (and roll back if they back into it).
-    const v = kid.clone().addScaledVector(dir, -WAGON.tow).sub(p).setY(0).multiplyScalar(10);
+    const v = kid.clone().addScaledVector(dir, -w.tow).sub(p).setY(0).multiplyScalar(10);
     if (v.length() > WAGON.maxSpeed) v.setLength(WAGON.maxSpeed);
     let vy = rb.linvel().y;
-    // Bump up over kerbs and the deck edge.
+    // Bump up over kerbs and the deck edge (and the garage floor's little lip, which the wheels catch on).
     if (v.lengthSq() > 0.25) {
       const fwd = v.clone().normalize();
-      const reach = WAGON.half[2] + 0.12;
+      const reach = w.half[2] + 0.12;
       const low = this.physics.raycast(p.clone().setY(p.y + 0.04), fwd, reach, groups(0xffff, GROUP.STATIC));
+      const lip = low ? null : this.physics.raycast(p.clone().setY(p.y + 0.012), fwd, reach, groups(0xffff, GROUP.STATIC));
       const high = this.physics.raycast(p.clone().setY(p.y + 0.34), fwd, reach, groups(0xffff, GROUP.STATIC));
       if (low && !high && low.normal.y < 0.5) vy = Math.max(vy, 1.8);
+      else if (lip && !high && lip.normal.y < 0.5) vy = Math.max(vy, 0.8);
     }
     rb.setLinvel({ x: v.x, y: vy, z: v.z }, true);
     // Handle end points at the kid.

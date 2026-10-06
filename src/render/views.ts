@@ -4,6 +4,7 @@ import { findPart, linkWorldEnds, partPose, type Blueprint } from '../sim/bluepr
 import type { MachineInstance, LinkRt } from '../sim/machine';
 import { toQ, toV } from '../sim/physics';
 import { WAGON, type Simulation } from '../sim/simulation';
+import type { WagonFrame } from '../sim/wagonbuild';
 import { M } from './materials';
 import { animatePart, partMesh, springGeometry } from './parts';
 
@@ -228,15 +229,19 @@ export class BlueprintView {
   }
 }
 
-/** The little red wagon, its handle, and whatever is riding in it. */
+/** The little red wagon (or the one the kid built), its handle, and whatever is riding in it. */
 export class WagonView {
   group = new THREE.Group();
+  /** The stock red wagon model. Hidden when the kid's own design is in use. */
+  private stock = new THREE.Group();
   private handle = new THREE.Group();
   private cargo = new THREE.Group();
   private wheels: THREE.Mesh[] = [];
   private loadKey = '';
   private roll = 0;
   private handlePitch = 1.62;
+  /** The kid's own wagon: their blueprint, turned so the handle points to -Z, wheels bottoms on the ground. */
+  private own: { bp: Blueprint; frame: WagonFrame; view: BlueprintView; wheels: { g: THREE.Group; axis: THREE.Vector3; q0: THREE.Quaternion }[] } | null = null;
   constructor() {
     const [hx, hy, hz] = WAGON.half;
     const red = M.plastic(0xc8261e);
@@ -246,7 +251,7 @@ export class WagonView {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
       mesh.position.set(x, y, z);
       mesh.castShadow = mesh.receiveShadow = true;
-      this.group.add(mesh);
+      this.stock.add(mesh);
       return mesh;
     };
     const t = 0.025;
@@ -271,7 +276,7 @@ export class WagonView {
         const hub = new THREE.Mesh(new THREE.BoxGeometry(0.047, r * 1.1, 0.03), M.plastic(0xf2efe8));
         w.add(hub);
         this.wheels.push(w);
-        this.group.add(w);
+        this.stock.add(w);
       }
     }
     // Handle: a bar hinged at the front with a T grip.
@@ -282,13 +287,39 @@ export class WagonView {
     grip.position.y = 0.9;
     this.handle.add(bar, grip);
     this.handle.position.set(0, 0.16, -hz - 0.02);
-    this.group.add(this.handle, this.cargo);
+    this.stock.add(this.handle);
+    this.group.add(this.stock, this.cargo);
+  }
+
+  /** Swap in (or out) the kid's own design. */
+  private setOwn(bp: Blueprint | null, frame: WagonFrame | null) {
+    if (this.own) {
+      this.own.view.group.parent?.removeFromParent();
+      this.own = null;
+    }
+    this.stock.visible = !bp;
+    if (!bp || !frame) return;
+    const view = new BlueprintView(bp);
+    const turn = new THREE.Group();
+    turn.rotation.y = frame.yaw;
+    view.group.position.set(-frame.center[0], -frame.minY, -frame.center[2]);
+    turn.add(view.group);
+    this.group.add(turn);
+    const wheels = frame.wheels
+      .map((w) => {
+        const g = view.parts.get(w.uid);
+        return g ? { g, axis: new THREE.Vector3(...w.axis), q0: g.quaternion.clone() } : null;
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x);
+    this.own = { bp, frame, view, wheels };
+    this.loadKey = '';
   }
 
   update(sim: Simulation, dt: number) {
     const w = sim.wagon;
     this.group.visible = !!w;
     if (!w) return;
+    if ((this.own?.bp ?? null) !== w.bp) this.setOwn(w.bp, w.frame);
     const p = toV(w.rb.translation());
     const q = toQ(w.rb.rotation());
     const moved = p.distanceTo(this.group.position);
@@ -296,8 +327,23 @@ export class WagonView {
     const sign = p.clone().sub(this.group.position).dot(fwd) >= 0 ? 1 : -1;
     this.group.position.copy(p);
     this.group.quaternion.copy(q);
-    this.roll += (sign * Math.min(moved, 1)) / 0.085;
+    const wheelR = this.own ? Math.max(0.05, ...this.own.frame.wheels.map((x) => x.r)) : 0.085;
+    this.roll += (sign * Math.min(moved, 1)) / wheelR;
     for (const wh of this.wheels) wh.rotation.x = -this.roll;
+    if (this.own) {
+      // Each wheel spins about its own hub axis; which way depends on which side it is on.
+      for (const wh of this.own.wheels) {
+        const worldAxis = wh.axis.clone().applyQuaternion(wh.q0).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.own.frame.yaw);
+        const side = worldAxis.x >= 0 ? 1 : -1;
+        wh.g.quaternion.copy(wh.q0).multiply(new THREE.Quaternion().setFromAxisAngle(wh.axis, -side * this.roll));
+      }
+      const key = w.load.map((s) => s.part).join(',');
+      if (key !== this.loadKey) {
+        this.loadKey = key;
+        this.fillCargo(w.load.map((s) => s.part), this.own.frame.bedHalf[0], this.own.frame.bedHalf[1], this.own.frame.bedTop);
+      }
+      return;
+    }
     // Handle: up to the kid's hand when pulling, resting on the ground otherwise.
     let pitch = 1.62;
     let yaw = 0;
@@ -320,9 +366,8 @@ export class WagonView {
   }
 
   /** Shrink each part to fit a slot in the bed: two across, four along. */
-  private fillCargo(parts: string[]) {
+  private fillCargo(parts: string[], hx = WAGON.half[0], hz = WAGON.half[2], floor = 0.165) {
     this.cargo.clear();
-    const [hx, , hz] = WAGON.half;
     const cellX = hx;
     const cellZ = (hz * 2) / 4;
     parts.forEach((id, i) => {
@@ -337,7 +382,7 @@ export class WagonView {
       const x = (col - 0.5) * cellX;
       const z = -hz + cellZ * (row + 0.5);
       const c = box.getCenter(new THREE.Vector3()).multiplyScalar(s);
-      g.position.set(x - c.x, 0.165 - box.min.y * s + layer * 0.1, z - c.z);
+      g.position.set(x - c.x, floor - box.min.y * s + layer * 0.1, z - c.z);
       this.cargo.add(g);
     });
   }
