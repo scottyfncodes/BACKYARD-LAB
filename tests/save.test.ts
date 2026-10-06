@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Builder } from '../src/sim/blueprint';
 import { PARTS } from '../src/data/parts';
-import { completeProject, defaultSave, discover, findBook, isUnlocked, keepWagon, loadSave, parseSave, revealHint, sandboxParts, SAVE_KEY, writeSave } from '../src/game/save';
+import { chapterRevealed, completeProject, defaultSave, discover, findBook, isUnlocked, keepWagon, loadSave, parseSave, revealChapter, revealHint, sandboxParts, SAVE_KEY, writeSave } from '../src/game/save';
 import { wagonBlueprint } from './helpers';
 
 class MemStore {
@@ -23,7 +23,7 @@ describe('save / load', () => {
     completeProject(s, 'build_wagon', 90, []);
     completeProject(s, 'ball_over_fence', 123, ['hands_off']);
     s.wagon = wagonBlueprint();
-    s.book = { found: true, read: ['motion', 'projectile'] };
+    s.book = { found: true, revealed: ['motion', 'forces', 'projectile'], read: ['motion', 'projectile'] };
     const b = new Builder('Zoomer');
     const c = b.free('crate');
     b.on('motor', 'base', c, [0, 0.2, 0], [0, 1, 0]);
@@ -70,9 +70,12 @@ describe('save / load', () => {
     expect(evil.creations).toHaveLength(0);
     expect(evil.hintsSeen).toEqual({ ball_over_fence: 4 });
     expect(evil.wagon).toBeNull();
-    expect(evil.book).toEqual({ found: false, read: [] });
-    const junkBook = parseSave(JSON.stringify({ v: 1, book: { found: 'yes', read: ['motion', 'astrology', 7] }, wagon: { parts: [{ uid: 1, def: 'death_ray', p: [0, 0, 0], q: [0, 0, 0, 1] }] } }));
-    expect(junkBook.book).toEqual({ found: true, read: ['motion'] });
+    expect(evil.book).toEqual({ found: false, revealed: [], read: [] });
+    const junkBook = parseSave(JSON.stringify({ v: 1, book: { found: 'yes', read: ['motion', 'astrology', 7], revealed: ['levers', 'nope'] }, wagon: { parts: [{ uid: 1, def: 'death_ray', p: [0, 0, 0], q: [0, 0, 0, 1] }] } }));
+    expect(junkBook.book).toEqual({ found: true, revealed: ['levers', 'motion', 'forces'], read: ['motion'] });
+    // A save from before pages could stick: a found book opens at its first chapters plus whatever was read.
+    const older = parseSave(JSON.stringify({ v: 1, book: { found: true, read: ['energy'] } }));
+    expect(older.book.revealed.sort()).toEqual(['energy', 'forces', 'motion']);
     expect(junkBook.wagon).toBeNull();
     const badSpot = parseSave(JSON.stringify({ v: 1, session: { mode: 'sandbox', machines: [], spot: { placement: { pos: [1, 'x', 2] }, player: [0, 0, 0] } } }));
     expect(badSpot.session?.spot).toBeNull();
@@ -125,12 +128,17 @@ describe('progression', () => {
     expect(sandboxParts()).not.toContain('playground_ball');
   });
 
-  it('PHYSICS 101 is found once, and the wagon the kid built is kept as its own copy', () => {
+  it('PHYSICS 101 is found once, its first pages come unstuck with it, and the wagon the kid built is kept as its own copy', () => {
     const s = defaultSave();
     expect(s.book.found).toBe(false);
     expect(findBook(s)).toBe(true);
     expect(findBook(s)).toBe(false);
     expect(s.book.found).toBe(true);
+    expect(s.book.revealed).toEqual(['motion', 'forces']);
+    expect(revealChapter(s, 'levers')).toBe(true);
+    expect(revealChapter(s, 'levers')).toBe(false);
+    expect(chapterRevealed(s, 'levers')).toBe(true);
+    expect(chapterRevealed(s, 'energy')).toBe(false);
     const bp = wagonBlueprint();
     keepWagon(s, bp);
     expect(s.wagon).toEqual(bp);

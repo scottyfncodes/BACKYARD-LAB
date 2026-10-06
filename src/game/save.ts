@@ -1,5 +1,5 @@
 import { PART_MAP, PARTS } from '../data/parts';
-import { CHAPTERS } from '../data/physics101';
+import { CHAPTERS, type ChapterId } from '../data/physics101';
 import { PROJECT_MAP, PROJECTS } from '../data/projects';
 import { parseBlueprint, type Blueprint } from '../sim/blueprint';
 import type { MachinePlacement } from '../sim/machine';
@@ -17,8 +17,8 @@ export interface SaveData {
   hintsSeen: Record<string, number>;
   /** The wagon the kid built in Mission 0 (null: the stock red one, for saves from before). */
   wagon: Blueprint | null;
-  /** Mom's PHYSICS 101: found on the shelf yet, and which chapters have been opened. */
-  book: { found: boolean; read: string[] };
+  /** Mom's PHYSICS 101: found on the shelf yet, which chapters have come unstuck, and which have been opened. */
+  book: { found: boolean; revealed: string[]; read: string[] };
   session: SessionData | null;
 }
 
@@ -57,7 +57,7 @@ export function defaultSave(): SaveData {
     settings: { sound: true, sensitivity: 1, hints: true },
     hintsSeen: {},
     wagon: null,
-    book: { found: false, read: [] },
+    book: { found: false, revealed: [], read: [] },
     session: null,
   };
 }
@@ -121,7 +121,10 @@ export function parseSave(raw: string | null): SaveData {
   if (b && typeof b === 'object') {
     d.book.found = b.found === true;
     d.book.read = strList(b.read, (s) => CHAPTER_IDS.has(s));
+    d.book.revealed = strList(b.revealed, (s) => CHAPTER_IDS.has(s));
     if (d.book.read.length) d.book.found = true;
+    // Anything already read has obviously come unstuck, and a found book always opens at its first chapters.
+    if (d.book.found) for (const id of [...CHAPTERS.filter((c) => c.unlock.withBook).map((c) => c.id), ...d.book.read]) if (!d.book.revealed.includes(id)) d.book.revealed.push(id);
   }
   d.session = parseSession(j.session);
   return d;
@@ -216,11 +219,23 @@ export function completeProject(save: SaveData, projectId: string, time: number,
   return { projects, sandbox };
 }
 
-/** The kid has opened PHYSICS 101. Returns true the first time. */
+/** The kid has opened PHYSICS 101. Returns true the first time. The first chapters come unstuck with it. */
 export function findBook(save: SaveData): boolean {
   if (save.book.found) return false;
   save.book.found = true;
+  for (const c of CHAPTERS) if (c.unlock.withBook) revealChapter(save, c.id);
   return true;
+}
+
+/** Pages come unstuck: the kid has met this idea. Returns true the first time. */
+export function revealChapter(save: SaveData, id: ChapterId): boolean {
+  if (save.book.revealed.includes(id)) return false;
+  save.book.revealed.push(id);
+  return true;
+}
+
+export function chapterRevealed(save: SaveData, id: ChapterId): boolean {
+  return save.book.revealed.includes(id);
 }
 
 /** The wagon rolled out of the lab: it is the kid's from now on, in every project. */

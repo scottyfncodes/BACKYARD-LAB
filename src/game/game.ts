@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Audio } from '../audio/audio';
 import { getPart, PART_MAP, PARTS } from '../data/parts';
-import { CHAPTER_MAP, CHAPTERS, type ChapterId } from '../data/physics101';
+import { CHAPTER_MAP, CHAPTERS, chaptersForParts, type ChapterId } from '../data/physics101';
 import { PROJECT_MAP, PROJECTS, STAGES, type ProjectDef } from '../data/projects';
 import { EAST_FENCE_X, inZone, LOOK_HINTS, WORLD } from '../data/world';
 import { buildEnvironment, type Environment } from '../render/environment';
@@ -25,7 +25,7 @@ import { Input } from './input';
 import { RunJournal } from './journal';
 import { PhysicsBook } from './physicsbook';
 import { Replay } from './replay';
-import { completeProject, discover, findBook, keepWagon, loadSave, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
+import { completeProject, discover, findBook, keepWagon, loadSave, revealChapter, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
 
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
@@ -219,7 +219,11 @@ export class Game {
       onExit: (bp: Blueprint) => this.exitBuild(bp),
       onTest: (bp: Blueprint) => this.startTest(bp),
       onStopTest: () => this.stopTest(),
-      onChange: () => this.persistSoon(),
+      onChange: (bp: Blueprint) => {
+        // Parts on the bench are how the kid meets an idea: a hinge, a bungee, a rocket…
+        this.revealChapters(chaptersForParts(bp.parts.map((p) => p.def)));
+        this.persistSoon();
+      },
       creations: () => this.save.creations,
       ideas: () => ideasFor(this.sandbox ? null : this.projectId),
       onBench: (d: string) => (this.stash.get(d) ?? 0) + this.build.bp.parts.filter((p) => p.def === d).length,
@@ -340,7 +344,7 @@ export class Game {
       h('h2', {}, '📓 Lab Notebook'),
       h('p', {}, `Junk discovered: ${found}/${total}`),
       h('p', {}, `Bonus stars: ${tb.earned}/${tb.possible}`),
-      h('p', {}, s.book.found ? `📖 Physics 101: ${s.book.read.length}/${CHAPTERS.length} chapters opened` : '📖 Physics 101: somewhere in the lab…'),
+      h('p', {}, s.book.found ? `📖 Physics 101: ${s.book.revealed.length}/${CHAPTERS.length} chapters unstuck, ${s.book.read.length} read` : '📖 Physics 101: somewhere in the lab…'),
       ...(s.wagon ? [h('p', {}, `🛒 The wagon: ${s.wagon.parts.length} parts, built by me`)] : []),
       ...stages,
       h('div', { class: 'row' }, btn('Back', back)),
@@ -715,8 +719,22 @@ export class Game {
       this.audio.play('discover');
       this.persist();
     }
+    // Coming from a test result counts as meeting the idea: those pages come unstuck now.
+    if (chapter) this.revealChapters([chapter], false);
     if (this.running) this.resetRun();
     this.book.open(chapter, () => this.modal.hide());
+  }
+
+  /**
+   * Pages come unstuck when the kid meets an idea. Quiet until the book has
+   * been found (nothing to flip through yet); after that, a small toast.
+   */
+  private revealChapters(ids: ChapterId[], announce = true) {
+    const fresh = ids.filter((id) => revealChapter(this.save, id));
+    if (!fresh.length) return;
+    this.persistSoon();
+    if (!announce || !this.save.book.found) return;
+    this.toasts.show(`📖 Pages came unstuck: <b>${fresh.map((id) => CHAPTER_MAP[id].title).join(', ')}</b>`, 'new', 3200);
   }
 
   // ================================================================== MISSION 0: the wagon
@@ -1428,7 +1446,8 @@ export class Game {
     // The clues: what the probe measured, so a test that didn't work still says something exact.
     if (r.facts.length && r.mood !== 'worked') parts.push(h('ul', { class: 'facts' }, ...r.facts.map((f) => h('li', {}, f))));
     if (r.tryNext) parts.push(h('p', { class: 'try' }, `💭 ${r.tryNext}`));
-    // "Why didn't that work?" has a page in Mom's book.
+    // "Why didn't that work?" has a page in Mom's book, and failing is how the kid meets the idea.
+    if (r.chapter && r.mood !== 'worked') this.revealChapters([r.chapter], false);
     const bookBtn =
       r.chapter && r.mood !== 'worked'
         ? btn(this.save.book.found ? `📖 ${CHAPTER_MAP[r.chapter].title}` : '📖 Maybe Mom’s physics book knows?', () => this.openBook(r.chapter), 'small book-link')

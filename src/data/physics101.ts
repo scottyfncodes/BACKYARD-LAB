@@ -16,6 +16,12 @@ export interface ChapterDef {
   id: ChapterId;
   n: number;
   title: string;
+  /**
+   * When the pages come unstuck: the first chapters open with the book; the rest
+   * open the moment the kid meets the idea, by putting one of these parts on
+   * the bench or by a test result that points at the chapter.
+   */
+  unlock: { withBook: true } | { withBook?: false; parts: string[]; tease: string };
   /** What this chapter is good for, in the kid's words. Shown in the contents. */
   useFor: string;
   /** THE IDEA, in one or two plain sentences. */
@@ -35,6 +41,7 @@ export const CHAPTERS: ChapterDef[] = [
     id: 'motion',
     n: 1,
     title: 'Motion',
+    unlock: { withBook: true },
     useFor: 'How far, how fast, which way.',
     idea: 'Speed is how much ground something covers every second. Keep the speed and the distance just keeps adding up. Speeding up or slowing down is acceleration.',
     words: [
@@ -54,6 +61,7 @@ export const CHAPTERS: ChapterDef[] = [
     id: 'forces',
     n: 2,
     title: 'Forces',
+    unlock: { withBook: true },
     useFor: 'Pushes, pulls, friction, gravity.',
     idea: 'A force is a push or a pull. Things only start moving, stop, or change direction when the pushes and pulls on them do not cancel out. Friction is the push that fights sliding. Gravity is the pull straight down.',
     words: [
@@ -74,6 +82,7 @@ export const CHAPTERS: ChapterDef[] = [
     id: 'levers',
     n: 3,
     title: 'Levers & Turning',
+    unlock: { parts: ['hinge', 'broom'], tease: 'Something swings, or something tips over.' },
     useFor: 'Lifting heavy things, swinging arms, why machines tip.',
     idea: 'A push makes things turn around a pivot. Push farther from the pivot and the same push makes more turn. That is the whole trick of a lever: a long arm lets a small push beat a big load on a short arm.',
     words: [
@@ -93,6 +102,7 @@ export const CHAPTERS: ChapterDef[] = [
     id: 'projectile',
     n: 4,
     title: 'Projectile Motion',
+    unlock: { parts: ['bottle_rocket', 'bungee', 'spring', 'trampoline'], tease: 'Something gets thrown, flung or launched.' },
     useFor: 'Launching, throwing, lobbing things over fences.',
     idea: 'Once something is in the air, only gravity is pulling on it. It keeps its sideways speed and gravity eats its upward speed. Launch faster to go farther. Launch steeper to go higher. About 45° goes farthest.',
     words: [
@@ -112,6 +122,7 @@ export const CHAPTERS: ChapterDef[] = [
     id: 'energy',
     n: 5,
     title: 'Energy',
+    unlock: { parts: ['battery_small', 'battery_car', 'bungee', 'spring'], tease: 'Something stores up oomph: a battery, a spring, a bungee.' },
     useFor: 'Stored-up oomph, batteries, springs, what makes things go.',
     idea: 'Energy is stored-up ability to make things move. A stretched bungee, a lifted weight, a charged battery: all stored energy. Let it go and it turns into moving energy. It never disappears; it just moves house (some of it into heat and noise).',
     words: [
@@ -129,6 +140,12 @@ export const CHAPTERS: ChapterDef[] = [
     ],
   },
 ];
+
+/** Which chapters the bench just made relevant: any chapter whose parts are on it. */
+export function chaptersForParts(partIds: Iterable<string>): ChapterId[] {
+  const have = new Set(partIds);
+  return CHAPTERS.filter((c) => !c.unlock.withBook && c.unlock.parts.some((id) => have.has(id))).map((c) => c.id);
+}
 
 export const CHAPTER_MAP: Record<ChapterId, ChapterDef> = Object.fromEntries(CHAPTERS.map((c) => [c.id, c])) as Record<ChapterId, ChapterDef>;
 

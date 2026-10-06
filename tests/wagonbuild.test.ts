@@ -142,6 +142,22 @@ describe('the wagon the kid built rolls like the real thing', () => {
     expect(toV(sim.wagon!.rb.translation()).x).toBeLessThan(-8);
   });
 
+  it('walking into the wagon on the handle shoves it along; the kid never climbs onto it', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.build_wagon, wagon: false, junk: false });
+    sim.addWagon(wagonBlueprint(), { pos: [0, 0, 0], yaw: -90 });
+    sim.teleportPlayer([2.2, 0, 0], Math.PI / 2);
+    sim.hitchWagon(true);
+    const west = { ...emptyInput(), yaw: Math.PI / 2, moveZ: 1 };
+    let highest = 0;
+    for (let i = 0; i < 360; i++) {
+      sim.step(west);
+      highest = Math.max(highest, toV(sim.player!.translation()).y);
+    }
+    expect(highest).toBeLessThan(0.75);
+    expect(toV(sim.wagon!.rb.translation()).x).toBeLessThan(-3);
+    expect(sim.wagon!.hitched).toBe(true);
+  });
+
   it('two things in the wagon is not enough; neither is three things in the stock wagon parked outside', () => {
     const p = PROJECT_MAP.build_wagon;
     const sim = new Simulation({ project: p, junk: false });

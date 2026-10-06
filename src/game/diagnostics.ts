@@ -48,6 +48,10 @@ export interface RunStats {
   /** Where it came back down, if it flew: how far it travelled through the air, and how far from home it landed. */
   flightRange: number;
   landedGap: number | null;
+  /** The machine (or a piece of it) took off: a rocket, a flung arm. How high, and how far it travelled. */
+  launched: boolean;
+  launchPeak: number;
+  launchRange: number;
   /** A vacuum or fan on the machine: how close to the target its air ever pointed (degrees, while in range). */
   airPart: string | null;
   aimOff: number | null;
@@ -115,6 +119,9 @@ export function emptyStats(): RunStats {
     flew: false,
     flightRange: 0,
     landedGap: null,
+    launched: false,
+    launchPeak: 0,
+    launchRange: 0,
     airPart: null,
     aimOff: null,
     airBlocked: false,
@@ -153,6 +160,7 @@ export class TestProbe {
   private project: ProjectDef | null = null;
   private machines: MachineInstance[] = [];
   private startCenter = new Map<number, Vector3>();
+  private startBodies = new Map<number, Vector3[]>();
   private startUp = new Map<number, Vector3>();
   private targetStart: Vector3 | null = null;
   private wasGrabbed = false;
@@ -166,8 +174,10 @@ export class TestProbe {
     this.startUp.clear();
     this.wasGrabbed = false;
     this.airborne = null;
+    this.startBodies.clear();
     for (const m of this.machines) {
       this.startCenter.set(m.id, m.center());
+      this.startBodies.set(m.id, m.bodies.map((b) => toV(b.rb.translation())));
       const b = mainBody(m);
       if (b) this.startUp.set(m.id, new Vector3(0, 1, 0).applyQuaternion(toQ(b.rotation())));
       for (const group of components(m.bp)) {
@@ -214,6 +224,19 @@ export class TestProbe {
       if (!sim.machines.has(m.id) || m.state !== 'running') continue;
       const c0 = this.startCenter.get(m.id);
       if (c0) s.machineMoved = Math.max(s.machineMoved, m.center().distanceTo(c0));
+      // Anything that climbs well clear of where it started has been launched (rockets, flung arms, bits that broke off).
+      const b0 = this.startBodies.get(m.id) ?? [];
+      m.bodies.forEach((b, i) => {
+        const start = b0[i];
+        if (!start) return;
+        const p = toV(b.rb.translation());
+        const up = p.y - start.y;
+        if (up > 0.8) s.launched = true;
+        if (s.launched) {
+          s.launchPeak = Math.max(s.launchPeak, up);
+          s.launchRange = Math.max(s.launchRange, Math.hypot(p.x - start.x, p.z - start.z));
+        }
+      });
       const b = mainBody(m);
       const up0 = this.startUp.get(m.id);
       if (b && up0) {
@@ -381,15 +404,22 @@ export function analyze(s: RunStats, project: ProjectDef | null): TestReport {
   const alsoWeak = weak ? ` The battery was struggling too (about ${Math.round((power.value ?? 0) * 100)}% power).` : '';
   if (weak && reached && closer < Math.max(0.3, s.goalStart * 0.9))
     return say(`It was trying, but the battery couldn’t keep up. It only got about ${Math.round((power.value ?? 0) * 100)}% of the power it wanted.`, 'What happens with a bigger battery?', 'learned', 'energy');
+  // The machine itself flew (a rocket, a flung arm, a bit that tore loose) but the target stayed put: a launch to aim and size.
+  if (s.hasTarget && s.launched && s.targetMoved < 0.25 && !s.unsnagged) {
+    const tore = s.breaks && s.lastBreak ? `The ${getPart(s.lastBreak.part).name.toLowerCase()} tore off the ${getPart(s.lastBreak.other).name.toLowerCase()} and flew!` : 'It flew!';
+    const path = s.launchRange < 0.5 ? `Straight up ${m1(s.launchPeak)}, and straight back down.` : `Up ${m1(s.launchPeak)}, and came down ${m1(s.launchRange)} away.`;
+    const near = Number.isFinite(s.closest) ? ` The closest it came to the ${what} was ${m1(s.closest)}.` : '';
+    return say(`${tore} ${path}${near}`, s.launchRange < 0.5 ? 'Lean it toward the ' + what + '? Launch angle decides where it goes.' : 'Lean it a different way? More oomph, or less?', 'learned', 'projectile');
+  }
   if (s.breaks && s.lastBreak) {
     const a = getPart(s.lastBreak.part).name.toLowerCase();
     const b = getPart(s.lastBreak.other).name.toLowerCase();
     return say(`CLUNK. The ${a} came off the ${b}. That joint had more load than it could take.`, 'Less weight on it? Or attach it somewhere sturdier?', 'learned', 'forces');
   }
   if (s.snaps && s.lastSnap) return say(`SNAP. The ${getPart(s.lastSnap).name.toLowerCase()} couldn’t take the pull.`, 'Something lighter, or a shorter pull?', 'learned', 'forces');
+  if (s.snagged && !s.unsnagged && s.pushPeak >= 0.45) return say(`The ${what} shook, but it’s still snagged. Almost!`, 'A bit more push? Closer, or stronger?', 'close', 'forces');
   if (s.maxTilt > 100) return say('It flipped right over. Interesting!', 'Try a wider base, or something heavy down low.', 'learned', 'levers');
   if (s.snagged && s.unsnagged && s.goalEnd > 0.3) return say(`The ${what} is free! Now it just has to come down.`, 'What happens when the push stops? (■ STOP)', 'close');
-  if (s.snagged && !s.unsnagged && s.pushPeak >= 0.45) return say(`The ${what} shook, but it’s still snagged. Almost!`, 'A bit more push? Closer, or stronger?', 'close', 'forces');
   if (s.grabbed && s.lostGrip > 0 && !s.heldAtEnd) return say(`It grabbed the ${what}… and then lost its grip.`, 'Hold it tighter, or pull more gently?', 'close', 'forces');
   // It flew: a launch that came up short, or long, or sideways.
   if (s.hasTarget && s.flew && s.landedGap !== null && !s.playerHandled && s.landedGap > 0.1) {
@@ -428,6 +458,7 @@ export function factsOf(s: RunStats, project: ProjectDef | null): string[] {
   const what = project?.target ?? 'target';
   const out: string[] = [];
   if (s.hasTarget && s.flew) out.push(`The ${what} flew ${m1(s.flightRange)}, ${m1(s.targetPeak)} high`);
+  if (s.launched) out.push(`The machine flew ${m1(s.launchPeak)} high, ${m1(s.launchRange)} across`);
   if (s.hasTarget && Number.isFinite(s.closest) && s.closest > 0.02 && !s.flew) out.push(`Closest: ${m1(s.closest)} from the ${what}`);
   if (s.hasTarget && s.targetMoved > 0.1 && !s.playerHandled) out.push(`The ${what} moved ${m1(s.targetMoved)}`);
   if (s.hasTarget && s.goalEnd > 0.05 && s.goalStart > 0.05) out.push(`Still ${m1(s.goalEnd)} from home`);

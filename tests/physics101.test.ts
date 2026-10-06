@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { CHAPTER_MAP, CHAPTERS, distanceTravelled, GRAVITY, heightAt, heightFromEnergy, kineticEnergy, LATER_CHAPTERS, lever, projectilePeak, projectileRange, slide, speedAfter, speedFromEnergy, springEnergy, torque, trajectory } from '../src/data/physics101';
+import { CHAPTER_MAP, CHAPTERS, chaptersForParts, distanceTravelled, GRAVITY, heightAt, heightFromEnergy, kineticEnergy, LATER_CHAPTERS, lever, projectilePeak, projectileRange, slide, speedAfter, speedFromEnergy, springEnergy, torque, trajectory } from '../src/data/physics101';
 import { analyze, emptyStats } from '../src/game/diagnostics';
 import { PROJECT_MAP } from '../src/data/projects';
+import { PART_MAP } from '../src/data/parts';
 
 describe('PHYSICS 101: the chapters', () => {
   it('starts with the five early chapters, each with an idea, words, a note from Mom and optional math', () => {
@@ -18,6 +19,21 @@ describe('PHYSICS 101: the chapters', () => {
     // The later chapters are only teasers for now.
     expect(LATER_CHAPTERS.map((c) => c.title)).toContain('Momentum');
     expect(LATER_CHAPTERS.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('pages come unstuck as the kid meets each idea: the first two with the book, the rest from parts on the bench', () => {
+    expect(CHAPTERS.filter((c) => c.unlock.withBook).map((c) => c.id)).toEqual(['motion', 'forces']);
+    for (const c of CHAPTERS) {
+      if (c.unlock.withBook) continue;
+      expect(c.unlock.parts.length).toBeGreaterThan(0);
+      for (const id of c.unlock.parts) expect(PART_MAP[id], `${c.id}: ${id}`).toBeTruthy();
+      expect(c.unlock.tease.length).toBeGreaterThan(10);
+    }
+    expect(chaptersForParts(['plank', 'lawn_wheel'])).toEqual([]);
+    expect(chaptersForParts(['plank', 'hinge'])).toEqual(['levers']);
+    expect(chaptersForParts(['crate', 'bungee'])).toEqual(['projectile', 'energy']);
+    expect(chaptersForParts(['battery_small'])).toEqual(['energy']);
+    expect(chaptersForParts(['bottle_rocket'])).toEqual(['projectile']);
   });
 
   it('is a tool, not homework: no quizzes, grades or "correct answers" anywhere in it', () => {
@@ -103,6 +119,17 @@ describe('PHYSICS 101 connects to the test results', () => {
     expect(r.observation).toMatch(/0\.8 m short/);
     expect(r.facts.some((f) => /flew 2\.3 m/.test(f))).toBe(true);
     expect(r.mood).toBe('close');
+  });
+
+  it('the machine itself flying (a rocket, a flung arm) that misses is a launch to aim: Projectile Motion', () => {
+    const r = analyze({ ...emptyStats(), hasTarget: true, snagged: true, closest: 1.4, machineMoved: 6, launched: true, launchPeak: 5.8, launchRange: 3.1, maxTilt: 160 }, PROJECT_MAP.kite_in_tree);
+    expect(r.chapter).toBe('projectile');
+    expect(r.observation).toMatch(/flew.*5\.8 m.*3\.1 m.*1\.4 m/);
+    const tore = analyze({ ...emptyStats(), hasTarget: true, closest: 0.1, launched: true, launchPeak: 8.2, launchRange: 0.1, breaks: 1, lastBreak: { part: 'bottle_rocket', other: 'brick' } }, PROJECT_MAP.kite_in_tree);
+    expect(tore.chapter).toBe('projectile');
+    expect(tore.observation).toMatch(/tore off the brick.*Straight up 8\.2 m/);
+    expect(r.observation).not.toMatch(/flipped/);
+    expect(r.facts).toContain('The machine flew 5.8 m high, 3.1 m across');
   });
 
   it('every kind of result hands over the clues it has, in plain units, never more than four', () => {
