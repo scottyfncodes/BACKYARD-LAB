@@ -516,21 +516,21 @@ html, body {
   flex-direction: column;
   gap: 8px;
 }
+/* Laid out exactly like .title-screen so its note sits where the title note will be: no jump at hand-off. */
 .loading {
   position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
   flex-direction: column;
+  padding: calc(14px + var(--safe-t)) calc(16px + var(--safe-r)) calc(14px + var(--safe-b)) calc(16px + var(--safe-l));
   background: linear-gradient(#8fc1ea, #f7d9a9);
   z-index: 10;
   font-weight: 900;
   font-size: 22px;
-  gap: 12px;
   transition: opacity 0.5s;
 }
-.loading .logo { text-align: center; }
+.loading .msg { margin: auto 0; text-align: center; }
 .loading.done { opacity: 0; pointer-events: none; }
 
 @media (max-height: 480px) {
