@@ -25,7 +25,11 @@ import { Input } from './input';
 import { RunJournal } from './journal';
 import { PhysicsBook } from './physicsbook';
 import { Replay } from './replay';
+import { sandboxLock, titleAction, titleContraption } from './title';
 import { completeProject, discover, findBook, keepWagon, loadSave, revealChapter, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
+
+/** Title-screen framing: the half-built wagon by the junk pile, the broom it still needs, and where the camera drifts. */
+const TITLE_SHOT = { at: [-5.3, 1.8, 2.1] as const, broom: [-4.7, 2.5, 1.2] as const, look: [-5.45, 0.3, 2.0] as const, yaw: 0.75 };
 
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
@@ -106,6 +110,11 @@ export class Game {
   private thought: Thought;
   private modal: Modal;
   private stickHint!: HTMLElement;
+  private titleEl!: HTMLElement;
+  private titleGo: (() => void) | null = null;
+  /** The half-built wagon on the title screen, and the wheel that keeps getting flicked. */
+  private titleHero: { id: number; spinner: number; spin: number } | null = null;
+  private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   constructor(canvas: HTMLCanvasElement, ui: HTMLElement) {
     this.ui = ui;
@@ -163,6 +172,15 @@ export class Game {
     if (!started && project) {
       // Title-screen backdrop: the prop sits where it will be.
       for (const s of project.props) this.sim.spawnItem(s);
+    }
+    this.titleHero = null;
+    if (!started) {
+      // The hero of the title screen: a wagon that's still missing its handle, parked by the junk pile.
+      const { bp, spinner } = titleContraption();
+      const bb = blueprintBounds(bp);
+      const m = this.sim.addMachine(bp, { pos: [TITLE_SHOT.at[0], -bb.min.y + 0.005, TITLE_SHOT.at[1]], yaw: TITLE_SHOT.at[2] });
+      this.sim.spawnItem({ part: 'broom', pos: [TITLE_SHOT.broom[0], 0.05, TITLE_SHOT.broom[1]], rotY: TITLE_SHOT.broom[2] });
+      this.titleHero = { id: m.id, spinner, spin: 0 };
     }
     // The lab bench starts clear: the parts bin is on the shelf beside it.
     if (started) for (const it of this.benchTopItems()) this.sim.removeItem(it.id);
@@ -264,7 +282,8 @@ export class Game {
     this.reticle = h('div', { class: 'reticle' });
     this.prompt = h('div', { class: 'prompt' });
     this.stickHint = h('div', { class: 'hint-stick hidden' }, '◀ drag to move · drag right side to look ▶');
-    this.ui.append(this.hudTop, this.reticle, this.prompt, this.stickHint);
+    this.titleEl = h('div', { class: 'title-screen hidden' });
+    this.ui.append(this.hudTop, this.reticle, this.prompt, this.stickHint, this.titleEl);
     this.actions = new ActionBar(this.ui, 'right');
     this.leftActions = new ActionBar(this.ui, 'lefttop');
   }
@@ -276,34 +295,77 @@ export class Game {
   // ================================================================== menus
 
   private showTitle() {
+    // Back from a game: the yard goes back to its title-screen self (the session was saved on the way out).
+    if (this.projectId || this.sandbox || !this.titleHero) {
+      this.carrying?.view.group.removeFromParent();
+      this.carrying = null;
+      this.testMachine = null;
+      this.hideResults();
+      this.clearMusings();
+      this.thought.hide();
+      this.projectId = null;
+      this.sandbox = false;
+      this.newSim(PROJECT_MAP.ball_over_fence, false);
+    }
     this.mode = 'title';
+    this.modal.hide();
     this.setHudVisible(false);
     this.input.unlockPointer();
-    const o = this.cam.orbit;
-    o.center.set(4, 1, 1);
-    o.dist = 19;
-    o.pitch = 0.36;
-    o.yaw = 0.35;
-    this.cam.set('free', true);
+    this.cam.set('intro', true);
+    this.updateTitle(0);
     const s = this.save;
-    const sess = s.session;
-    const next = PROJECTS.find((p) => s.unlocked.includes(p.id) && !s.completed[p.id]) ?? PROJECTS[0];
-    const content: Node[] = [h('div', { class: 'logo' }, 'BACKYARD', h('span', {}, 'LAB'))];
-    content.push(h('p', { class: 'muted' }, 'A kid. A problem. A yard full of junk.'));
-    const row = h('div', { class: 'row', style: 'flex-direction:column' });
-    if (sess) {
-      const label = sess.mode === 'sandbox' ? 'Sandbox' : PROJECT_MAP[sess.project!].title;
-      row.append(btn(`▶ Continue — ${label}`, () => this.resume(), 'go'));
-    } else {
-      row.append(btn(`▶ Play — ${next.title}`, () => this.startProject(next.id), 'go'));
+    const act = titleAction(s);
+    this.titleGo = () => (act.resume ? this.resume() : this.startProject(act.project!));
+    const go = btn(`${act.verb}<small>${act.sub}</small>`, () => this.titleGo?.(), 'go title-go');
+    const lock = sandboxLock(s);
+    const icon = (glyph: string, label: string, onPress: () => void, cls = '') => {
+      const b = btn(`<span class="ico">${glyph}</span><span class="cap">${label}</span>`, onPress, `title-icon ${cls}`);
+      b.setAttribute('aria-label', label);
+      return b;
+    };
+    const sandbox = lock
+      ? icon('🧪<i>🔒</i>', `Solve ${lock}`, () => {
+          this.audio.play('error');
+          this.toasts.show(`🔒 Solve <b>${lock}</b> to open the sandbox.`, '', 2400);
+        }, 'locked')
+      : icon('🧪', 'Sandbox', () => this.startSandbox());
+    sandbox.setAttribute('aria-label', lock ? `Sandbox: locked until you solve ${lock}` : 'Sandbox');
+    this.titleEl.replaceChildren(
+      h('div', { class: 'title-lockup' }, h('div', { class: 'logo' }, 'BACKYARD', h('span', {}, 'LAB')), h('p', {}, 'A kid. A problem. A yard full of junk.')),
+      h(
+        'div',
+        { class: 'title-dock' },
+        go,
+        h('div', { class: 'title-icons' }, icon('📋', 'Projects', () => this.showProjects()), sandbox, icon('📓', 'Notebook', () => this.showNotebook()), icon('⚙', 'Settings', () => this.showSettings(() => this.showTitle()))),
+      ),
+    );
+    this.titleEl.classList.remove('hidden');
+  }
+
+  private hideTitle() {
+    this.titleEl.classList.add('hidden');
+  }
+
+  /** Title screen: a slow drift around the half-built wagon by the junk pile while one wheel gets flicked. */
+  private updateTitle(dt: number) {
+    const hero = this.titleHero;
+    const still = this.reducedMotion.matches;
+    const t = still ? 0 : this.time;
+    if (hero) {
+      if (!still) {
+        // A flick every few seconds that slowly runs down, like a kid testing the axle.
+        const k = (this.time % 4.5) / 4.5;
+        hero.spin += dt * 14 * Math.exp(-k * 3.2);
+      }
+      const g = this.view.machines.get(hero.id)?.parts.get(hero.spinner);
+      g?.rotateZ(-hero.spin);
     }
-    row.append(btn('📋 Projects', () => this.showProjects()));
-    const opensSandbox = PROJECTS.find((p) => p.unlocksSandbox !== false && !s.completed[p.id]);
-    row.append(btn(s.sandbox ? '🧪 Sandbox' : `🔒 Sandbox (solve ${opensSandbox?.title ?? 'a project'} first)`, () => (s.sandbox ? this.startSandbox() : this.audio.play('error'))));
-    row.append(btn('📓 Lab Notebook', () => this.showNotebook()));
-    row.append(btn('⚙ Settings', () => this.showSettings(() => this.showTitle())));
-    content.push(row);
-    this.modal.show(content, 'title');
+    const look = new THREE.Vector3(...TITLE_SHOT.look);
+    const wide = this.r.camera.aspect > 1;
+    const yaw = TITLE_SHOT.yaw + Math.sin(t * 0.17) * 0.25;
+    const dist = wide ? 3.0 : 2.5;
+    this.cam.intro.look.copy(look).setY(look.y + Math.sin(t * 0.21) * 0.04);
+    this.cam.intro.p.set(look.x + Math.sin(yaw) * dist, (wide ? 1.35 : 1.45) + Math.sin(t * 0.17) * 0.08, look.z + Math.cos(yaw) * dist);
   }
 
   private showProjects(back: () => void = () => this.showTitle()) {
@@ -407,6 +469,7 @@ export class Game {
   startProject(id: string, fresh = true) {
     const p = PROJECT_MAP[id];
     if (!p) return;
+    this.hideTitle();
     this.modal.hide();
     this.clearMusings();
     this.wagonCelebrated = false;
@@ -437,6 +500,7 @@ export class Game {
   }
 
   startSandbox() {
+    this.hideTitle();
     this.modal.hide();
     this.sandbox = true;
     this.projectId = null;
@@ -1698,6 +1762,10 @@ export class Game {
       if (k === 'escape' && this.mode !== 'title') this.modal.hide();
       return;
     }
+    if (this.mode === 'title') {
+      if (k === 'enter') this.titleGo?.();
+      return;
+    }
     if (this.mode === 'build') return;
     if (this.mode === 'replay') {
       if (k === 'escape' || k === 'v') this.stopReplay();
@@ -1790,7 +1858,7 @@ export class Game {
     if (this.mode === 'intro') this.updateIntro(dt);
     if (this.mode === 'carry') this.updateCarry();
     if (this.mode === 'build') this.build.update(dt);
-    if (this.mode === 'title') this.cam.orbit.yaw = 0.35 + Math.sin(this.time * 0.06) * 0.35;
+    if (this.mode === 'title') this.updateTitle(dt);
     this.updateGate(dt);
     this.updateHud();
     this.updateAudio(dt);
