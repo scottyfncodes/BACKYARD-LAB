@@ -251,6 +251,101 @@ html, body {
   pointer-events: none !important;
 }
 
+/* ---------------------------------------------------------------- title screen
+   The yard is the hero: a little taped-up note at the top, the verb in the thumb zone, nothing in between. */
+.title-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: calc(14px + var(--safe-t)) calc(16px + var(--safe-r)) calc(14px + var(--safe-b)) calc(16px + var(--safe-l));
+  pointer-events: none !important;
+  z-index: 3;
+}
+.title-screen > * { pointer-events: auto; }
+.title-lockup {
+  position: relative;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  border-radius: 16px;
+  padding: 12px 18px 10px;
+  box-shadow: 0 5px 0 rgba(47, 36, 24, 0.4);
+  transform: rotate(-1.5deg);
+  text-align: center;
+  margin-top: 10px;
+  animation: pop 0.3s ease-out;
+}
+.title-lockup::before {
+  content: '';
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  width: 84px;
+  height: 20px;
+  margin-left: -42px;
+  background: var(--tape);
+  opacity: 0.85;
+  transform: rotate(3deg);
+  border-radius: 3px;
+}
+.title-lockup .logo { font-size: 38px; margin: 2px 0 4px; white-space: nowrap; }
+.title-lockup .logo span { display: inline; margin-left: 0.22em; }
+.title-lockup p { margin: 0; font-size: 15px; font-weight: 800; opacity: 0.75; }
+.title-dock { width: min(100%, 420px); display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+.btn.title-go { min-height: 76px; font-size: 28px; line-height: 1.05; border-radius: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.btn.title-go small { font-size: 13px; font-weight: 800; letter-spacing: 0.06em; opacity: 0.9; text-shadow: none; }
+.title-icons { display: flex; justify-content: center; gap: 12px; }
+.title-icons .btn.title-icon { width: auto; min-width: 62px; }
+.btn.title-icon {
+  min-width: 0;
+  min-height: 0;
+  width: 62px;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.btn.title-icon .ico {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  border: 3px solid var(--ink);
+  background: rgba(255, 246, 227, 0.92);
+  box-shadow: 0 3px 0 rgba(47, 36, 24, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21px;
+  font-style: normal;
+}
+.btn.title-icon .cap { font-size: 11px; font-weight: 900; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75); white-space: nowrap; }
+.btn.title-icon.pressed .ico { transform: translateY(2px); box-shadow: 0 1px 0 rgba(47, 36, 24, 0.35); }
+.btn.title-icon.pressed, .btn.title-icon:active { transform: none; box-shadow: none; }
+.btn.title-icon.locked .ico { background: rgba(246, 231, 200, 0.85); border-style: dashed; filter: grayscale(0.7); }
+.btn.title-icon.locked .ico i { position: absolute; right: -6px; bottom: -4px; font-style: normal; font-size: 15px; filter: none; }
+.btn.title-icon.locked .cap { opacity: 0.95; }
+@media (min-width: 900px) and (min-height: 600px) {
+  .title-lockup { margin-top: 18px; padding: 14px 26px 12px; }
+  .title-lockup .logo { font-size: 48px; }
+  .title-lockup p { font-size: 17px; }
+}
+@media (max-height: 480px) {
+  .title-lockup { margin-top: 2px; padding: 8px 14px 6px; }
+  .title-lockup .logo { font-size: 28px; }
+  .title-dock { gap: 8px; }
+  .btn.title-go { min-height: 58px; font-size: 22px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .title-lockup { animation: none; }
+}
+
 /* ---------------------------------------------------------------- modal cards */
 .modal {
   position: fixed;
