@@ -30,6 +30,7 @@ import { generateStuds, rankInDirection, type Stud } from './studs';
 import type { Idea } from '../data/ideas';
 import { transformPoint } from '../sim/geom';
 import type { WagonNote } from '../sim/wagonbuild';
+import type { PushVerdict } from './pushtest';
 
 export interface Stash {
   infinite: boolean;
@@ -72,6 +73,8 @@ export interface BuildHost {
   goLabel: string;
   /** Open PHYSICS 101, once it has been found. */
   onBook: (() => void) | null;
+  /** MISSION 0: the first experiment is a PUSH TEST on the garage floor (null: the usual bench try-out). */
+  onPush: ((bp: Blueprint) => void) | null;
 }
 
 interface MoveState {
@@ -91,6 +94,12 @@ interface Holding {
   /** The player turned / flipped it themselves: stop auto-orienting. */
   manual: boolean;
   moving?: MoveState;
+}
+
+/** Tag a button with what it does, so the coach can point at it. */
+function act<T extends HTMLElement>(el: T, id: string): T {
+  el.dataset.act = id;
+  return el;
 }
 
 /** A button that fires on press and keeps firing while held. */
@@ -160,6 +169,9 @@ export class BuildMode {
   private trayLabel!: HTMLElement;
   private notesEl!: HTMLElement;
   private notesKey = '';
+  /** The push test: running (no verdict yet) or showing what happened. */
+  pushing: { verdict: PushVerdict | null } | null = null;
+  private pushEl!: HTMLElement;
   /** Expanding rings where parts just clicked together. */
   private rings: { mesh: THREE.Mesh; t: number }[] = [];
   private pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number; grab?: boolean; gx?: number; gy?: number }>();
@@ -230,8 +242,9 @@ export class BuildMode {
   }
 
   exit() {
+    if (this.testing) this.stopTest();
     this.active = false;
-    document.body.classList.remove('noting');
+    document.body.classList.remove('noting', 'experimenting');
     this.clearHolding();
     this.select(null);
     for (const [t, n, f] of this.listeners) t.removeEventListener(n, f);
@@ -268,10 +281,11 @@ export class BuildMode {
     this.trayLabel = h('div', { class: 'tray-label' });
     this.notesEl = h('div', { class: 'wagon-notes hidden' });
     this.notesKey = '';
-    for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.notesEl]) {
+    this.pushEl = h('div', { class: 'push-card hidden' });
+    for (const el of [this.tray, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.notesEl, this.pushEl]) {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     }
-    this.root.append(top, this.tray, this.trayLabel, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.cursorEl, this.cursorTag, this.guideEl, this.notesEl);
+    this.root.append(top, this.tray, this.trayLabel, this.status, this.panel, this.tools, this.dpad, this.placeBar, this.goBox, this.cursorEl, this.cursorTag, this.guideEl, this.notesEl, this.pushEl);
     this.host.ui.appendChild(this.root);
   }
 
@@ -297,6 +311,53 @@ export class BuildMode {
     this.renderMarkers();
     this.renderGuide();
     this.renderNotes();
+    this.renderPush();
+  }
+
+  /** The part in hand, for the coach. */
+  get holdingDef(): string | null {
+    return this.holding && !this.holding.moving ? this.holding.def : null;
+  }
+
+  /** MISSION 0's experiment: what the push did, and the way back to building. */
+  private renderPush() {
+    const p = this.pushing;
+    document.body.classList.toggle('experimenting', !!p);
+    if (!p) {
+      this.pushEl.classList.add('hidden');
+      return;
+    }
+    const v = p.verdict;
+    const icon = !v ? '👀' : v.mood === 'rolled' ? '✅' : '🤔';
+    const kids: HTMLElement[] = [
+      h('div', { class: 'push-head' }, h('span', { class: 'push-tag' }, 'EXPERIMENT'), h('span', {}, v ? 'What happened' : 'Watching it roll…')),
+      v ? h('p', { class: `push-line ${v.mood}` }, h('i', {}, icon), v.line) : h('p', { class: 'push-line watching' }, h('i', {}, icon), 'Does it roll? Does it tip? Watch.'),
+    ];
+    if (v) kids.push(h('div', { class: 'push-facts' }, ...v.facts.map((f) => h('span', {}, f))));
+    if (v?.next) kids.push(h('p', { class: 'push-next' }, `💭 ${v.next}`));
+    if (v) {
+      kids.push(
+        h(
+          'div',
+          { class: 'row' },
+          act(btn('↺ RESET', () => this.stopTest(), 'small primary'), 'pushreset'),
+          btn('👉 Push again', () => {
+            this.stopTest();
+            this.push();
+          }, 'small'),
+        ),
+      );
+    }
+    this.pushEl.replaceChildren(...kids);
+    this.pushEl.classList.remove('hidden');
+  }
+
+  /** The push test is over: show what the bench measured. */
+  showPushVerdict(v: PushVerdict) {
+    if (!this.pushing) return;
+    this.pushing.verdict = v;
+    this.host.audio.play(v.mood === 'rolled' ? 'ding' : 'hmm');
+    this.refresh();
   }
 
   /** MISSION 0: the bench thinking out loud about whether this is a wagon yet. */
@@ -329,7 +390,9 @@ export class BuildMode {
 
   private renderTop() {
     const b: HTMLElement[] = [];
-    if (this.testing) {
+    if (this.testing && this.pushing) {
+      b.push(act(btn('↺ RESET', () => this.stopTest(), this.pushing.verdict ? 'primary' : 'danger'), 'pushreset'));
+    } else if (this.testing) {
       b.push(btn('■ STOP TEST', () => this.stopTest(), 'danger'));
     } else {
       if (this.host.sandbox) {
@@ -351,11 +414,10 @@ export class BuildMode {
     const show = !this.testing && !this.holding && this.bp.parts.length > 0;
     this.goBox.classList.toggle('hidden', !show);
     if (!show) return;
-    const b: HTMLElement[] = [
-      btn('⚙ Try it here', () => this.test(), 'small'),
-      btn('📍 Place it myself', () => this.done(), 'small'),
-      btn(this.host.goLabel, () => this.testOut(), 'go test-btn'),
-    ];
+    // MISSION 0: the first experiment is a real shove across the garage floor; placing it yourself would just roll it out.
+    const b: HTMLElement[] = this.host.onPush
+      ? [act(btn('👉 PUSH TEST', () => this.push(), 'blue test-btn'), 'push'), act(btn(this.host.goLabel, () => this.testOut(), 'go test-btn'), 'go')]
+      : [btn('⚙ Try it here', () => this.test(), 'small'), btn('📍 Place it myself', () => this.done(), 'small'), act(btn(this.host.goLabel, () => this.testOut(), 'go test-btn'), 'go')];
     this.goBox.replaceChildren(...b);
   }
 
@@ -380,7 +442,7 @@ export class BuildMode {
         const def = getPart(id);
         const slot = h(
           'div',
-          { class: `slot ${this.holding?.def === id ? 'active' : ''} ${count <= 0 ? 'empty' : ''} ${!this.holding && this.guideStep()?.part === id ? 'wanted' : ''}` },
+          { class: `slot ${this.holding?.def === id ? 'active' : ''} ${count <= 0 ? 'empty' : ''} ${!this.holding && this.guideStep()?.part === id ? 'wanted' : ''}`, 'data-part': id },
           h('img', { src: partThumb(this.host.r.renderer, id), alt: def.name, draggable: 'false' }),
           h('div', { class: 'name' }, def.name),
           h('div', { class: 'count' }, this.host.stash.infinite ? '∞' : String(count)),
@@ -809,7 +871,12 @@ export class BuildMode {
    */
   private bestMachineStud(start: { x: number; y: number }): boolean {
     if (getPart(this.holding!.def).link) return this.snapNear(start.x, start.y, Infinity, true);
-    const cands = this.visibleStuds()
+    const held = getPart(this.holding!.def);
+    // Only wheels go looking for shafts and axles by default; anything else can still be dragged onto one.
+    const wheelish = held.sockets.some((sk) => sk.joint === 'axle');
+    // A wheel may go on the far side too (the view swings round to show it): that's where the next wheel usually belongs.
+    const studsHere = wheelish ? this.studs.map((st, i) => ({ i, ...this.toScreen(st.point) })) : this.visibleStuds();
+    const cands = studsHere
       .filter((c) => this.studs[c.i].part !== null)
       .map((c) => ({ i: c.i, d: Math.hypot(c.x - start.x, c.y - start.y) }))
       .sort((a, b) => a.d - b.d);
@@ -822,10 +889,20 @@ export class BuildMode {
       total += m;
     }
     if (total > 0) com.divideScalar(total);
-    const held = getPart(this.holding!.def);
     const mass = held.mass;
-    // Only wheels go looking for shafts and axles by default; anything else can still be dragged onto one.
-    const wheelish = held.sockets.some((sk) => sk.joint === 'axle');
+    // Wheels already on: a new one goes where it spreads them out (other side, other end), so the obvious build stands up.
+    const wheels = wheelish ? this.bp.parts.filter((p) => getPart(p.def).sockets.some((sk) => sk.joint === 'axle')).map((p) => partPose(p).p) : [];
+    // MISSION 0, still missing a handle, holding something long: the natural fit is one that sticks out to pull by.
+    const one = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: held.id, p: [0, 0, 0], q: [0, 0, 0, 1] }], links: [] });
+    const size = one.max.clone().sub(one.min);
+    const pole = Math.max(size.x, size.y, size.z) > 4 * Math.min(size.x, size.y, size.z) && Math.max(size.x, size.y, size.z) > 0.8;
+    const wantHandle = pole && !wheelish && !!this.host.notes(this.bp)?.some((n) => n.id === 'handle' && !n.done);
+    const reach = (pl: Placement) => {
+      const b = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: held.id, p: [pl.pose.p.x, pl.pose.p.y, pl.pose.p.z], q: [pl.pose.q.x, pl.pose.q.y, pl.pose.q.z, pl.pose.q.w] }], links: [] });
+      let r = 0;
+      for (const x of [b.min.x, b.max.x]) for (const z of [b.min.z, b.max.z]) r = Math.max(r, Math.hypot(x - com.x, z - com.z));
+      return r;
+    };
     let best: { i: number; score: number } | null = null;
     for (const c of pool) {
       const pl = this.placementFor(c.i) as (Placement & { score?: number }) | null;
@@ -835,12 +912,30 @@ export class BuildMode {
       const onto = this.studs[c.i].part !== null ? findPart(this.bp, this.studs[c.i].part!) : null;
       const ontoWheel = !!onto && getPart(onto.def).sockets.some((sk) => sk.joint === 'axle');
       const jointy = !!pl.conn && pl.conn.kind !== 'weld' && pl.conn.kind !== 'tether';
-      const score = (pl.score ?? 0) - off * mass * 0.5 - c.d / 400 - (ontoWheel ? 6 : 0) - (jointy && !wheelish ? 6 : 0);
+      let spread = 0;
+      if (wheels.length) {
+        const here = pl.pose.p;
+        const nearest = Math.min(...wheels.map((w) => Math.hypot(w.x - here.x, w.z - here.z)));
+        // Where the wheels' middle would end up, compared to the middle of the machine: balanced is better.
+        const mid = wheels.reduce((a, w) => a.add(w), here.clone()).divideScalar(wheels.length + 1);
+        spread = Math.min(nearest, 0.6) * 10 - Math.hypot(mid.x - com.x, mid.z - com.z) * 4;
+      }
+      if (wantHandle) spread += reach(pl) * 8;
+      const score = (pl.score ?? 0) + spread - (wheels.length ? 0 : off * mass * 0.5) - c.d / 400 - (ontoWheel ? 6 : 0) - (jointy && !wheelish ? 6 : 0);
       if (!best || score > best.score) best = { i: c.i, score };
     }
     if (!best) return false;
     this.aimAt(best.i, false);
+    this.showStud(best.i);
     return true;
+  }
+
+  /** Swing the view round so a lock point on the far side of the machine is in sight. */
+  private showStud(i: number) {
+    const st = this.studs[i];
+    const cam = this.host.r.camera.position.clone().sub(this.host.benchOrigin);
+    if (!st || st.normal.dot(cam.sub(st.point)) > 0 || Math.abs(st.normal.y) > 0.7) return;
+    this.host.cam.yawGoal = Math.atan2(st.normal.x, st.normal.z) + 0.35;
   }
 
   private firstValidStud() {
@@ -1412,6 +1507,7 @@ export class BuildMode {
       o.dist = THREE.MathUtils.clamp((o.dist * this.pinch.d) / Math.max(20, d), 0.7, 6);
       // Two fingers moving together orbit the view.
       o.yaw -= (dx / 2) * 0.008;
+      this.host.cam.yawGoal = null;
       o.pitch = THREE.MathUtils.clamp(o.pitch + (dy / 2) * 0.006, 0.05, 1.45);
       this.pinch.d = d;
       this.pinch.a = ang;
@@ -1429,6 +1525,7 @@ export class BuildMode {
     if (moved > 6) {
       const o = this.host.cam.orbit;
       o.yaw -= dx * 0.008;
+      this.host.cam.yawGoal = null;
       o.pitch = THREE.MathUtils.clamp(o.pitch + dy * 0.006, 0.05, 1.45);
     }
   }
@@ -1518,9 +1615,23 @@ export class BuildMode {
     this.refresh();
   }
 
+  /** 👉 PUSH TEST: onto the floor, one shove, watch. */
+  private push() {
+    const go = this.host.onPush;
+    if (!this.bp.parts.length || !go) return;
+    this.clearHolding(false);
+    this.select(null);
+    this.testing = true;
+    this.pushing = { verdict: null };
+    this.view.group.visible = false;
+    go(this.bp);
+    this.refresh();
+  }
+
   stopTest() {
     if (!this.testing) return;
     this.testing = false;
+    this.pushing = null;
     this.view.group.visible = true;
     this.host.onStopTest();
     this.refresh();

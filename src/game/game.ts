@@ -14,7 +14,11 @@ import type { SimEvent } from '../sim/events';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
 import { GROUP, groups, toV } from '../sim/physics';
 import { emptyInput, PLAYER, Simulation, WAGON, type Item, type SimInput } from '../sim/simulation';
-import { wagonCheck } from '../sim/wagonbuild';
+import { wagonCheck, type WagonCheck } from '../sim/wagonbuild';
+import { Beacon } from '../render/beacon';
+import { Trail } from '../render/trail';
+import { coachStep, type CoachSnapshot, type CoachView } from './coach';
+import { pushPlan, PushProbe, pushVerdict, shove, type PushVerdict } from './pushtest';
 import { partThumb } from '../render/thumbs';
 import { ActionBar, btn, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
 import { BuildMode, type Stash } from './build';
@@ -65,6 +69,7 @@ export class Game {
   private acc = 0;
   private last = performance.now();
   private time = 0;
+  private frameDt = 1 / 60;
   private yaw = 0;
   private pitch = 0;
   private stepT = 0;
@@ -96,6 +101,25 @@ export class Game {
   private book!: PhysicsBook;
   private bookBtn!: HTMLElement;
 
+  // ---- MISSION 0: the first experiment, and the coach that walks through it
+  /** The push test on the garage floor: its probe while it runs. */
+  private push: { probe: PushProbe; done: boolean } | null = null;
+  private pushes = 0;
+  private pushReset = false;
+  private lastPush: PushVerdict['mood'] | null = null;
+  private everHitched = false;
+  /** What the bench thinks of the wagon on it (kept up to date as parts go on and off). */
+  private benchCheck: WagonCheck | null = null;
+  private coachEl!: HTMLElement;
+  private ribbonText!: HTMLElement;
+  private coachFinger!: HTMLElement;
+  private coachKey = '';
+  private coachT = 0;
+  private coachHl: Element[] = [];
+  private coachView: CoachView | null = null;
+  private beacon!: Beacon;
+  private trail!: Trail;
+
   // UI
   ui: HTMLElement;
   private hudTop!: HTMLElement;
@@ -125,6 +149,8 @@ export class Game {
     this.env = buildEnvironment({ grassBlades: q.grass });
     this.r.scene.add(this.env.root);
     this.fx = new Effects(this.r.scene);
+    this.beacon = new Beacon(this.r.scene);
+    this.trail = new Trail(this.r.scene);
     this.cam = new CameraDirector(this.r.camera);
     this.input = new Input(canvas);
     this.input.sensitivity = this.save.settings.sensitivity;
@@ -189,6 +215,9 @@ export class Game {
     this.env.gate.rotation.y = 0;
     this.gateAnim = 0;
     this.running = false;
+    document.body.classList.remove('running');
+    this.push = null;
+    this.trail?.clear();
     this.succeeded = false;
     this.replay = new Replay();
     this.absorbedOnce.clear();
@@ -240,7 +269,11 @@ export class Game {
       onChange: (bp: Blueprint) => {
         // Parts on the bench are how the kid meets an idea: a hinge, a bungee, a rocket…
         this.revealChapters(chaptersForParts(bp.parts.map((p) => p.def)));
+        this.refreshBenchCheck(bp);
         this.persistSoon();
+      },
+      get onPush() {
+        return self.wagonMission() && !self.sim.wagon ? (bp: Blueprint) => self.startPush(bp) : null;
       },
       creations: () => this.save.creations,
       ideas: () => ideasFor(this.sandbox ? null : this.projectId),
@@ -283,7 +316,12 @@ export class Game {
     this.prompt = h('div', { class: 'prompt' });
     this.stickHint = h('div', { class: 'hint-stick hidden' }, '◀ drag to move · drag right side to look ▶');
     this.titleEl = h('div', { class: 'title-screen hidden' });
-    this.ui.append(this.hudTop, this.reticle, this.prompt, this.stickHint, this.titleEl);
+    this.coachEl = h('div', { class: 'coach hidden', role: 'status', 'aria-live': 'polite' });
+    this.coachEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    this.coachFinger = h('div', { class: 'coach-finger hidden', 'aria-hidden': 'true' }, '👆');
+    this.ribbonText = h('span', {}, 'TESTING');
+    this.ui.append(h('div', { class: 'mode-ribbon', 'aria-hidden': 'true' }, h('i'), this.ribbonText));
+    this.ui.append(this.hudTop, this.reticle, this.prompt, this.stickHint, this.titleEl, this.coachEl, this.coachFinger);
     this.actions = new ActionBar(this.ui, 'right');
     this.leftActions = new ActionBar(this.ui, 'lefttop');
   }
@@ -431,10 +469,14 @@ export class Game {
       this.persist();
       this.showSettings(back);
     }, 'small');
+    const tutorial = btn(this.save.tutorial.done ? '🎓 Replay' : '🎓 On', () => {
+      if (this.save.tutorial.done) this.replayTutorial();
+    }, 'small');
     this.modal.show([
       h('h2', {}, 'Settings'),
       h('div', { class: 'setting' }, 'Sound', sound),
       h('div', { class: 'setting' }, 'Thoughts & hints', hints),
+      h('div', { class: 'setting' }, 'First-build tutorial', tutorial),
       h('div', { class: 'setting' }, 'Look speed', sens),
       h(
         'p',
@@ -456,6 +498,7 @@ export class Game {
     rows.append(btn('📋 Projects', () => this.showProjects(() => this.showMenu())));
     if (this.save.sandbox && !this.sandbox) rows.append(btn('🧪 Sandbox', () => this.startSandbox()));
     rows.append(btn('📓 Lab Notebook', () => this.showNotebook(() => this.showMenu())));
+    rows.append(btn('🎓 Replay the tutorial', () => this.replayTutorial()));
     rows.append(btn('⚙ Settings', () => this.showSettings(() => this.showMenu())));
     rows.append(btn('🏠 Title', () => {
       this.persist();
@@ -488,6 +531,11 @@ export class Game {
       discover(this.save, id);
     }
     if (keep) this.restoreSession(keep);
+    this.pushes = 0;
+    this.pushReset = false;
+    this.lastPush = null;
+    this.everHitched = false;
+    this.refreshBenchCheck(this.bench);
     this.persist();
     this.beginIntro(p);
   }
@@ -749,13 +797,19 @@ export class Game {
     }
     this.sim.objectivesPaused = false;
     this.audio.unlock();
+    // First build: start out looking at the lab, where the bench is, rather than at the house.
+    if (this.coaching() && !this.sim.wagon && !this.bench.parts.length) {
+      const p = this.sim.player!.translation();
+      this.sim.teleportPlayer([p.x, 0, p.z], Math.atan2(WORLD.workbench.pos[0] - p.x, WORLD.workbench.pos[2] - p.z) + Math.PI);
+    }
     this.enterExplore();
     this.idleNudged = false;
     const p = this.projectId ? PROJECT_MAP[this.projectId] : null;
     if (this.save.settings.hints && p && !this.save.completed[p.id]) {
       // Thinking out loud: a chain of "what ifs", then where the parts are.
       const lines = [...(p.musings ?? [])];
-      if (!Object.keys(this.save.completed).length || p.deliverable === 'wagon') lines.push('My parts bin is in the lab. Tap 🔧 BENCH to start building.');
+      // The coach card says where to go; without it, the kid says it out loud.
+      if (!this.coaching() && (!Object.keys(this.save.completed).length || p.deliverable === 'wagon')) lines.push('My parts bin is in the lab. Tap 🔧 BENCH to start building.');
       this.clearMusings();
       lines.forEach((line, i) => {
         this.musingTimers.push(window.setTimeout(() => this.mode === 'explore' && !this.modal.open && this.thought.say(line, 4200), 900 + i * 4600));
@@ -829,14 +883,208 @@ export class Game {
     // It rolls out of the lab and parks by the door, handle toward the yard, kid at the handle.
     const at = { pos: WORLD.wagon.pos, yaw: -90 };
     this.sim.addWagon(clone(bp), at);
+    this.benchCheck = null;
     this.sim.teleportPlayer([at.pos[0] + 2.2, 0, at.pos[2]], Math.PI / 2);
     this.enterExplore();
     this.pitch = -0.25;
     this.audio.play('attach', new THREE.Vector3(...at.pos));
     this.fx.emit('dust', new THREE.Vector3(at.pos[0], 0.05, at.pos[2]), 16);
-    this.thought.say('Okay. Moment of truth. Does it roll? Grab the handle: 🛒 PULL.', 5500);
+    this.thought.say(this.coaching() ? 'Okay. Moment of truth.' : 'Okay. Moment of truth. Does it roll? Grab the handle: 🛒 PULL.', this.coaching() ? 2500 : 5500);
     this.persist();
     return true;
+  }
+
+  /** 🔧 FIX IT: the wagon goes back on the bench, as built, to change one thing. */
+  private rebuildWagon() {
+    const w = this.sim.wagon;
+    if (!w?.bp || !this.wagonMission() || this.succeeded) return;
+    if (w.load.length) this.sim.tipWagon();
+    if (this.bench.parts.length) this.parkBench();
+    this.bench = clone(w.bp);
+    this.sim.removeWagon();
+    this.wagonCelebrated = false;
+    this.audio.play('pickup');
+    this.goToBench();
+    this.persist();
+  }
+
+  // ================================================================== MISSION 0: the push test
+
+  /**
+   * 👉 PUSH TEST: the first experiment. The machine goes on the garage floor
+   * and gets one real shove toward the open door. The probe watches; the bench
+   * says what happened; ↺ RESET puts it back.
+   */
+  private startPush(bp: Blueprint) {
+    const test = clone(bp);
+    const plan = pushPlan(this.sim, test);
+    if (!plan) {
+      // Somehow no room on the floor: try it on the bench like any machine.
+      this.startTest(bp);
+      return;
+    }
+    const m = this.sim.addMachine(test, plan.placement);
+    this.testMachine = m.id;
+    m.go();
+    shove(m, plan.dir);
+    const probe = new PushProbe();
+    probe.begin(m, plan.dir);
+    this.push = { probe, done: false };
+    this.ribbonText.textContent = 'EXPERIMENT';
+    this.pushes++;
+    this.journal.begin(this.sim);
+    this.trail.clear();
+    const at = m.center();
+    this.audio.play('whoosh', at);
+    this.fx.emit('dust', at.clone().setY(0.05), 10, { speed: 1.2 });
+    // Pull back and look along the lane, so the whole roll is in view.
+    const o = this.cam.orbit;
+    o.center.copy(at).setY(0.25).addScaledVector(plan.dir, 1.2);
+    o.dist = 3.6;
+    o.pitch = 0.5;
+    o.yaw = Math.atan2(plan.dir.z, plan.dir.x) + Math.PI / 2 + 0.25;
+  }
+
+  private updatePush(dt: number) {
+    const p = this.push;
+    if (!p || this.testMachine === null) return;
+    const m = this.sim.machines.get(this.testMachine);
+    if (!m) return;
+    const c = m.center();
+    if (!p.done) {
+      this.trail.add(c, 0.02);
+      // Keep it in shot while it rolls.
+      this.cam.orbit.center.lerp(new THREE.Vector3(c.x, 0.25, c.z), 1 - Math.exp(-dt * 2.5));
+      if (p.probe.sample(dt)) {
+        p.done = true;
+        const v = pushVerdict(p.probe.result, wagonCheck(this.build.bp));
+        this.lastPush = v.mood;
+        this.trail.label(`${Math.max(0, p.probe.result.distance).toFixed(1)} m`, c, v.mood === 'rolled');
+        this.build.showPushVerdict(v);
+        if (v.mood === 'rolled') this.fx.emit('confetti', c.clone().add(new THREE.Vector3(0, 0.4, 0)), 14);
+      }
+    }
+  }
+
+  // ================================================================== the coach
+
+  /** The first-build tutorial is on for this session. */
+  private coaching(): boolean {
+    return this.wagonMission() && !this.save.tutorial.done;
+  }
+
+  private refreshBenchCheck(bp: Blueprint) {
+    this.benchCheck = this.wagonMission() && !this.sim.wagon && bp.parts.length ? wagonCheck(bp) : null;
+  }
+
+  private coachSnapshot(): CoachSnapshot {
+    const w = this.sim.wagon;
+    return {
+      mode: this.mode,
+      touch: this.input.touchMode,
+      check: this.benchCheck,
+      benchParts: (this.mode === 'build' ? this.build.bp : this.bench).parts.length,
+      holding: this.mode === 'build' ? this.build.holdingDef : null,
+      pushing: !!this.push,
+      pushes: this.pushes,
+      pushReset: this.pushReset,
+      lastPush: this.lastPush,
+      wagonOut: !!w,
+      everHitched: this.everHitched,
+      hitched: !!w?.hitched,
+      carrying: !!this.sim.carried,
+      load: w?.load.length ?? 0,
+      solved: this.succeeded,
+    };
+  }
+
+  /**
+   * One card, one next step, pointing at the real thing to press or the real
+   * place to go. Recomputed from the game state a few times a second.
+   */
+  private updateCoach(force = false) {
+    const on = this.coaching() && !this.succeeded && (this.mode === 'explore' || this.mode === 'build' || this.mode === 'carry') && !this.modal.open;
+    const v = on ? coachStep(this.coachSnapshot()) : null;
+    this.coachView = v;
+    document.body.classList.toggle('coaching', !!v);
+    if (!v) {
+      if (this.coachKey || force) {
+        this.coachKey = '';
+        this.coachEl.classList.add('hidden');
+        this.highlight(null);
+        this.beacon.set(null);
+      }
+      return;
+    }
+    const key = `${v.step.id}|${v.title}|${v.tip}|${v.n}`;
+    if (key !== this.coachKey || force) {
+      const fresh = !this.coachKey.startsWith(`${v.step.id}|`);
+      this.coachKey = key;
+      const beat = { build: '🔧', test: '🧪', watch: '👀', change: '🔁', use: '🛒' }[v.step.beat];
+      const dots = h('div', { class: 'coach-dots', 'aria-label': `Step ${v.n} of ${v.of}` }, ...Array.from({ length: v.of }, (_, i) => h('i', { class: i < v.n - 1 ? 'done' : i === v.n - 1 ? 'now' : '' })));
+      const skip = btn('✕', () => this.skipTutorial(), 'small round coach-skip');
+      skip.setAttribute('aria-label', 'Skip the tutorial');
+      this.coachEl.className = `coach beat-${v.step.beat}${fresh ? ' fresh' : ''}`;
+      this.coachEl.replaceChildren(
+        h('div', { class: 'coach-beat', 'aria-hidden': 'true' }, beat),
+        h('div', { class: 'coach-body' }, h('b', {}, v.title), h('span', {}, v.tip), dots),
+        skip,
+      );
+      if (fresh && v.n > 1) this.audio.play('ui');
+    }
+    this.highlight(v.target.ui ?? null);
+    // Places in the yard get a beacon you can see from anywhere.
+    const where = v.target.world;
+    const w = this.sim.wagon;
+    const spot =
+      where === 'junk' ? new THREE.Vector3(-6.7, 0, 2.5)
+      : where === 'lab' ? new THREE.Vector3(-9.6, 0, -3.2)
+      : where === 'wagon' && w ? toV(w.rb.translation()).setY(0)
+      : null;
+    // Standing right there: the beacon has done its job and would only block the view.
+    const feet = this.sim.player ? toV(this.sim.player.translation()).setY(0) : null;
+    this.beacon.set(spot && this.mode !== 'build' && (!feet || feet.distanceTo(spot) > 3.2) ? spot : null);
+  }
+
+  /** The coach's glow on whatever it is pointing at (re-found every tick: the HUD rebuilds its buttons). */
+  private highlight(selector: string | null) {
+    const els = selector ? [...this.ui.querySelectorAll(selector)].filter((e) => (e as HTMLElement).offsetParent !== null) : [];
+    for (const e of this.coachHl) if (!els.includes(e)) e.classList.remove('coach-hl');
+    for (const e of els) e.classList.add('coach-hl');
+    this.coachHl = els;
+  }
+
+  /** A finger that shows the move: from the part in the bin up onto the bench. */
+  private placeFinger() {
+    const v = this.coachView;
+    const from = v?.target.demo === 'drag' && this.mode === 'build' && !this.build.testing ? (this.coachHl[0] as HTMLElement | undefined) : undefined;
+    if (!from || this.reducedMotion.matches) {
+      this.coachFinger.classList.add('hidden');
+      return;
+    }
+    const a = from.getBoundingClientRect();
+    const b = BENCH_ORIGIN.clone().setY(BENCH_ORIGIN.y + 0.05).project(this.r.camera);
+    const st = this.coachFinger.style;
+    st.setProperty('--x0', `${a.left + a.width / 2}px`);
+    st.setProperty('--y0', `${a.top + a.height / 2}px`);
+    st.setProperty('--x1', `${((b.x + 1) / 2) * window.innerWidth}px`);
+    st.setProperty('--y1', `${((1 - b.y) / 2) * window.innerHeight}px`);
+    this.coachFinger.classList.remove('hidden');
+  }
+
+  private skipTutorial() {
+    this.save.tutorial.done = true;
+    this.persist();
+    this.updateCoach(true);
+    this.audio.play('ui');
+    this.toasts.show('Tutorial off. ☰ → <b>Replay the tutorial</b> brings it back.', '', 3200);
+  }
+
+  /** Start Mission 0 over with the coach on, from an empty bench. */
+  private replayTutorial() {
+    this.save.tutorial.done = false;
+    this.persist();
+    this.startProject(PROJECTS[0].id, false);
   }
 
   // ================================================================== explore
@@ -931,6 +1179,8 @@ export class Game {
       if (wagonNear) a.push({ id: 'load', label: `🛒 TO WAGON${k('L')}`, onPress: () => this.loadWagon(look.item) });
     } else if (look?.kind === 'wagon' && wagon) {
       if (!wagon.hitched) a.push({ id: 'hitch', label: `🛒 PULL${k('P')}`, cls: 'primary', onPress: () => this.toggleHitch() });
+      // Mission 0: the wagon you just built can still go back on the bench to be fixed.
+      if (!wagon.hitched && wagon.bp && this.wagonMission() && !this.succeeded) a.push({ id: 'fixwagon', label: '🔧 FIX IT', onPress: () => this.rebuildWagon() });
       if (wagon.load.length) {
         a.push({ id: 'takeout', label: `✊ TAKE OUT${wagon.hitched ? k('E') : ''}`, cls: wagon.hitched ? 'primary' : '', onPress: () => this.takeFromWagon() });
         a.push({ id: 'tip', label: '⤵ TIP OUT', onPress: () => this.tipWagon() });
@@ -960,7 +1210,7 @@ export class Game {
       a.push({ id: 'stop', label: `■ STOP${k('R')}`, cls: 'danger', onPress: () => this.resetRun() });
       if (this.projectId && !this.sandbox) a.push({ id: 'retry', label: `↺ RETRY${k('G')}`, onPress: () => this.retry() });
       a.push({ id: 'build', label: `🔧 BUILD${k('T')}`, onPress: () => this.tweakMachine() });
-      const camLabel = { eyes: '👀', chase: '🎥', wide: '🗺', free: '✋', bench: '🎥', intro: '🎥' }[this.cam.mode];
+      const camLabel = { eyes: '👀 VIEW', chase: '🎥 VIEW', wide: '🗺 VIEW', free: '✋ VIEW', bench: '🎥 VIEW', intro: '🎥 VIEW' }[this.cam.mode];
       a.push({ id: 'cam', label: `${camLabel}${k('C')}`, onPress: () => this.cycleCamera() });
       if (this.anyReceiver()) {
         a.push({ id: 'drive', label: this.driving ? `🎮 DRIVING${k('Tab')}` : `🚶 WALKING${k('Tab')}`, onPress: () => this.toggleDrive() });
@@ -1061,12 +1311,13 @@ export class Game {
       return;
     }
     this.sim.hitchWagon(true);
+    this.everHitched = true;
     if (this.wagonMission() && w.bp && !this.wagonCelebrated) {
       this.wagonCelebrated = true;
       this.wagonHinted = true;
       this.audio.play('discover');
       this.fx.emit('confetti', toV(w.rb.translation()).add(new THREE.Vector3(0, 0.6, 0)), 30);
-      this.thought.say('IT ROLLS. I built that. Now: load 3 things from the junk pile and haul them into the lab.', 6000);
+      this.thought.say(this.coaching() ? 'IT ROLLS. I built that!' : 'IT ROLLS. I built that. Now: load 3 things from the junk pile and haul them into the lab.', this.coaching() ? 3000 : 6000);
       return;
     }
     if (this.save.settings.hints && !this.wagonHinted) {
@@ -1130,7 +1381,8 @@ export class Game {
       if (!this.sandbox) this.addToBin(it);
     }
     this.absorbBench();
-    this.unloadWagon();
+    // MISSION 0: what's in the wagon IS the delivery. Emptying it onto the shelf before it counts would lose the mission.
+    if (!(this.wagonMission() && !this.succeeded)) this.unloadWagon();
     this.hideResults();
     this.clearMusings();
     this.mode = 'build';
@@ -1140,6 +1392,7 @@ export class Game {
     this.setHudVisible(false);
     this.thought.hide();
     document.body.classList.add('building');
+    this.refreshBenchCheck(this.bench);
     this.build.enter(this.bench);
   }
 
@@ -1331,6 +1584,18 @@ export class Game {
   private stopTest() {
     if (this.testMachine !== null) this.sim.removeMachine(this.testMachine);
     this.testMachine = null;
+    if (this.push) {
+      // ↺ RESET: back on the bench, exactly as it was. The camera comes home too.
+      this.push = null;
+      this.pushReset = true;
+      this.trail.clear();
+      this.audio.play('whoosh');
+      const o = this.cam.orbit;
+      o.center.copy(BENCH_ORIGIN).add(new THREE.Vector3(0, 0.12, 0));
+      o.dist = 1.7;
+      o.pitch = 0.6;
+      o.yaw = Math.PI / 2 + 0.35;
+    }
   }
 
   // ================================================================== carrying machines
@@ -1430,6 +1695,8 @@ export class Game {
     this.probe.begin(this.sim, this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null, this.testMachine);
     this.sim.goAll();
     this.running = true;
+    document.body.classList.add('running');
+    this.ribbonText.textContent = 'TESTING';
     this.verdictShown = false;
     this.journal.begin(this.sim);
     this.replay.start();
@@ -1468,6 +1735,7 @@ export class Game {
     const report = !this.succeeded && !this.verdictShown && this.journal.worthMentioning() ? this.report() : null;
     for (const m of [...this.sim.machines.values()]) if (m.id !== this.testMachine) this.sim.resetMachine(m.id);
     this.running = false;
+    document.body.classList.remove('running');
     this.verdictShown = true;
     this.replay.stop();
     this.cam.set('eyes', false, 0.8);
@@ -1614,6 +1882,7 @@ export class Game {
     for (const e of evs) {
       if (this.running || this.testMachine !== null) this.journal.event(e);
       if (this.running) this.probe.event(e);
+      if (this.push && !this.push.done) this.push.probe.event(e);
       this.eventFx(e);
     }
     for (const oe of this.sim.objectiveEvents.splice(0)) {
@@ -1727,6 +1996,9 @@ export class Game {
     const p = PROJECT_MAP[this.projectId];
     const byMachine = this.running && bonuses.some((b) => b.def.id === 'hands_off' && b.earned);
     const unlocked = completeProject(this.save, this.projectId, time, bonuses.filter((b) => b.earned).map((b) => b.def.id));
+    // Mission 0 done is the tutorial done: build, test, change, use.
+    if (p.deliverable === 'wagon') this.save.tutorial.done = true;
+    this.updateCoach(true);
     this.save.session = null;
     writeSave(this.save);
     this.audio.play('success');
@@ -1748,7 +2020,7 @@ export class Game {
       content.push(h('p', { class: 'muted' }, wagon ? 'Build something. Test it. Use it. Now… what else needs building?' : 'Wait. What ELSE can I build?'));
       const row = h('div', { class: 'row' });
       if (nextId) row.append(btn(`▶ ${PROJECT_MAP[nextId].title}`, () => this.startProject(nextId), 'go'));
-      row.append(btn('🧪 Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
+      if (this.save.sandbox) row.append(btn('🧪 Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
       row.append(btn('Keep tinkering', () => this.modal.hide()));
       content.push(row);
       this.modal.show(content, 'brief');
@@ -1842,6 +2114,7 @@ export class Game {
     const dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
     this.time += dt;
+    this.frameDt = dt;
     if (this.mode === 'replay') {
       if (!this.replay.update(this.view, dt)) {
         // loop the replay until stopped
@@ -1860,7 +2133,16 @@ export class Game {
     if (this.mode === 'build') this.build.update(dt);
     if (this.mode === 'title') this.updateTitle(dt);
     this.updateGate(dt);
+    this.updatePush(dt);
     this.updateHud();
+    this.coachT -= dt;
+    if (this.coachT <= 0) {
+      this.coachT = 0.12;
+      this.updateCoach();
+    }
+    this.placeFinger();
+    this.beacon.update(dt, this.reducedMotion.matches);
+    this.trail.update(dt);
     this.updateAudio(dt);
     this.updateEffects(dt);
     this.updateCamera(dt);
@@ -2033,7 +2315,7 @@ export class Game {
     this.prompt.classList.toggle('hidden', this.cam.mode !== 'eyes');
     // Never hand out hints unasked. After a long quiet spell, just point at where help lives, once.
     if (this.save.settings.hints && this.mode === 'explore' && !this.running && this.projectId && !this.sandbox) {
-      this.hintTimer += 1 / 60;
+      this.hintTimer += this.frameDt;
       if (this.hintTimer > 120 && !this.idleNudged && !this.sim.machines.size && !this.succeeded && !(this.save.hintsSeen[this.projectId] ?? 0)) {
         this.idleNudged = true;
         this.thought.say('Stuck? The 💡 up top has hints, if I want them.', 4500);
