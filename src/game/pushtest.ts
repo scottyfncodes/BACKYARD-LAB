@@ -2,7 +2,7 @@ import { Quaternion, Vector3 } from 'three';
 import { blueprintBounds, findPart, partPose, type Blueprint } from '../sim/blueprint';
 import type { SimEvent } from '../sim/events';
 import type { MachineInstance, MachinePlacement } from '../sim/machine';
-import { toQ, toV } from '../sim/physics';
+import { GROUP, groups, toQ, toV } from '../sim/physics';
 import type { Simulation } from '../sim/simulation';
 import { isWheel, wagonCheck, type WagonCheck } from '../sim/wagonbuild';
 import { machineFits } from './autospot';
@@ -24,12 +24,15 @@ export const PUSH = {
   /** Below this it counts as stopped. */
   restSpeed: 0.06,
   /** Where the push starts: on the garage floor, beside the bench, pointing out of the open east side. */
+  /** Where the push starts: x, z, and the floor height there. Garage floor first, the lawn outside if the floor is cluttered. */
   lane: [
-    [-11.1, -3.3],
-    [-11.1, -2.7],
-    [-11.4, -6.9],
-  ] as [number, number][],
-  floorY: 0.02,
+    [-11.1, -3.3, 0.02],
+    [-11.1, -2.7, 0.02],
+    [-11.4, -6.9, 0.02],
+    [-11.4, -7.8, 0.02],
+    [-6.6, -6.0, 0],
+    [-6.6, -1.6, 0],
+  ] as [number, number, number][],
 } as const;
 
 /** Rolled this far, it rolls. */
@@ -84,9 +87,10 @@ export function pushPlan(sim: Simulation, bp: Blueprint): PushPlan | null {
   const yaw = Math.atan2(d.z, d.x);
   const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), yaw);
   const mid = b.min.clone().add(b.max).multiplyScalar(0.5).setY(0).applyQuaternion(q);
-  for (const [x, z] of PUSH.lane) {
-    const placement: MachinePlacement = { pos: [x - mid.x, PUSH.floorY - b.min.y + 0.01, z - mid.z], yaw };
-    if (machineFits(sim, bp, placement)) return { placement, dir: new Vector3(1, 0, 0), rolls: !!rd };
+  for (const [x, z, floor] of PUSH.lane) {
+    const placement: MachinePlacement = { pos: [x - mid.x, floor - b.min.y + 0.01, z - mid.z], yaw };
+    // Clear of walls, and of anything lying around (junk, a parked machine, the wagon): overlapping bodies would go flying.
+    if (machineFits(sim, bp, placement) && machineFits(sim, bp, placement, groups(0xffff, GROUP.DYNAMIC | GROUP.CARRIED))) return { placement, dir: new Vector3(1, 0, 0), rolls: !!rd };
   }
   return null;
 }
@@ -121,6 +125,8 @@ export interface PushVerdict {
 /** Watches a push test. Pure measurement: no rendering, no DOM. */
 export class PushProbe {
   private m: MachineInstance | null = null;
+  /** The part that is the cart's body: its lean is the cart's lean (a wheel's "up" spins round as it rolls). */
+  private bodyPart: number | null = null;
   private dir = new Vector3(1, 0, 0);
   private start = new Vector3();
   private t = 0;
@@ -130,8 +136,9 @@ export class PushProbe {
   /** Where the machine has been, for the trail. */
   path: Vector3[] = [];
 
-  begin(m: MachineInstance, dir: Vector3) {
+  begin(m: MachineInstance, dir: Vector3, bodyPart: number | null = null) {
     this.m = m;
+    this.bodyPart = bodyPart;
     this.dir.copy(dir);
     this.start.copy(m.center());
     this.t = 0;
@@ -153,9 +160,12 @@ export class PushProbe {
     const c = m.center();
     const r = this.result;
     r.distance = Math.max(r.distance, c.clone().sub(this.start).dot(this.dir));
-    // The heaviest body is the body of the cart; how far has its "up" leaned?
-    let main = m.bodies[0];
-    for (const b of m.bodies) if (b.rb.mass() > main.rb.mass()) main = b;
+    // The cart's body (or, failing that, the heaviest body that isn't just a wheel): how far has its "up" leaned?
+    let main = this.bodyPart !== null ? m.parts.get(this.bodyPart)?.body : undefined;
+    if (!main) {
+      const solid = m.bodies.filter((b) => !b.parts.every((u) => isWheel(m.parts.get(u)?.def.id ?? '')));
+      for (const b of solid.length ? solid : m.bodies) if (!main || b.rb.mass() > main.rb.mass()) main = b;
+    }
     if (main) {
       const up = new Vector3(0, 1, 0).applyQuaternion(toQ(main.rb.rotation()));
       r.tilt = Math.max(r.tilt, (Math.acos(Math.min(1, Math.max(-1, up.y))) * 180) / Math.PI);
@@ -205,7 +215,7 @@ export function pushVerdict(r: PushResult, check: WagonCheck): PushVerdict {
     };
   }
   // Wheels down one side only: the other side scrapes along the floor even if it doesn't fall over.
-  if (check.wheels >= 2 && !check.spread && r.distance >= ROLLED) {
+  if (check.oneSide && r.distance >= ROLLED && r.tilt > 8) {
     return {
       mood: 'tipped',
       line: `It went ${m1(r.distance)}, but leaning ${Math.round(r.tilt)}°: the side with no wheels scraped along the floor.`,

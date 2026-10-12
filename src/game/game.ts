@@ -218,6 +218,7 @@ export class Game {
     this.running = false;
     document.body.classList.remove('running');
     this.push = null;
+    this.testMachine = null;
     this.trail?.clear();
     this.succeeded = false;
     this.replay = new Replay();
@@ -921,20 +922,22 @@ export class Game {
    * and gets one real shove toward the open door. The probe watches; the bench
    * says what happened; ↺ RESET puts it back.
    */
-  private startPush(bp: Blueprint) {
+  private startPush(bp: Blueprint): boolean {
     const test = clone(bp);
     const plan = pushPlan(this.sim, test);
+    this.cam.yawGoal = null;
     if (!plan) {
-      // Somehow no room on the floor: try it on the bench like any machine.
-      this.startTest(bp);
-      return;
+      // Nowhere clear to push it (the floor and the lawn by the door are all cluttered): say so rather than fling junk around.
+      this.toasts.show('No clear floor to push it on. Move some junk out of the way first!', '', 3000);
+      this.audio.play('hmm');
+      return false;
     }
     const m = this.sim.addMachine(test, plan.placement);
     this.testMachine = m.id;
     m.go();
     shove(m, plan.dir);
     const probe = new PushProbe();
-    probe.begin(m, plan.dir);
+    probe.begin(m, plan.dir, wagonCheck(test).body);
     this.push = { probe, done: false };
     this.ribbonText.textContent = 'EXPERIMENT';
     this.pushes++;
@@ -949,6 +952,7 @@ export class Game {
     o.dist = 3.6;
     o.pitch = 0.5;
     o.yaw = Math.atan2(plan.dir.z, plan.dir.x) + Math.PI / 2 + 0.25;
+    return true;
   }
 
   /**
@@ -1142,6 +1146,7 @@ export class Game {
       }
       if (this.cam.mode === 'free') {
         this.cam.orbit.yaw -= dx;
+        if (dx) this.cam.yawGoal = null;
         this.cam.orbit.pitch = THREE.MathUtils.clamp(this.cam.orbit.pitch + dy * 0.8, 0.05, 1.4);
       }
       if (rcActive) {
@@ -1619,6 +1624,7 @@ export class Game {
       // ↺ RESET: back on the bench, exactly as it was. The camera comes home too.
       this.push = null;
       this.pushReset = true;
+      this.cam.yawGoal = null;
       this.trail.clear();
       this.audio.play('whoosh');
       const o = this.cam.orbit;
@@ -1726,6 +1732,7 @@ export class Game {
     this.probe.begin(this.sim, this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null, this.testMachine);
     this.sim.goAll();
     this.trail.clear();
+    this.cam.yawGoal = null;
     this.running = true;
     document.body.classList.add('running');
     this.ribbonText.textContent = 'TESTING';

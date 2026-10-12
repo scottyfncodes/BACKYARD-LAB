@@ -74,7 +74,7 @@ export interface BuildHost {
   /** Open PHYSICS 101, once it has been found. */
   onBook: (() => void) | null;
   /** MISSION 0: the first experiment is a PUSH TEST on the garage floor (null: the usual bench try-out). */
-  onPush: ((bp: Blueprint) => void) | null;
+  onPush: ((bp: Blueprint) => boolean) | null;
 }
 
 interface MoveState {
@@ -208,6 +208,7 @@ export class BuildMode {
 
   enter(bp: Blueprint) {
     this.active = true;
+    this.host.cam.yawGoal = null;
     this.bp = bp;
     this.view = new BlueprintView(bp);
     this.view.group.position.copy(this.host.benchOrigin);
@@ -243,6 +244,7 @@ export class BuildMode {
 
   exit() {
     if (this.testing) this.stopTest();
+    this.host.cam.yawGoal = null;
     this.active = false;
     document.body.classList.remove('noting', 'experimenting');
     this.clearHolding();
@@ -1629,7 +1631,12 @@ export class BuildMode {
     this.testing = true;
     this.pushing = { verdict: null };
     this.view.group.visible = false;
-    go(this.bp);
+    if (!go(this.bp)) {
+      // Nowhere to push it: stay at the bench as if nothing happened.
+      this.testing = false;
+      this.pushing = null;
+      this.view.group.visible = true;
+    }
     this.refresh();
   }
 

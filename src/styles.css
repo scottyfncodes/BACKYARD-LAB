@@ -1177,3 +1177,12 @@ body.coaching .build-status { top: calc(156px + var(--safe-t)); }
   .card.brief p.loop { display: none; }
   .card.brief > .row:last-child, .card.hints > .row:last-child { bottom: -12px; margin: 8px -16px -12px; padding: 8px 16px 10px; }
 }
+/* The left action column (TEST / BUILD / TURN) sits under the coach card when both are up. */
+body.coaching .actions.lefttop { top: calc(158px + var(--safe-t)); }
+@media (max-height: 480px) {
+  body.coaching .actions.lefttop { top: calc(70px + var(--safe-t)); }
+}
+/* Narrow phones: the ribbon goes under the top bar so a long project name never runs into it. */
+@media (max-width: 600px) and (min-height: 481px) {
+  .mode-ribbon { top: calc(66px + var(--safe-t)); }
+}

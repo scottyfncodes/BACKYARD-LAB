@@ -22,7 +22,7 @@ function pushTest(bp: Blueprint) {
   m.go();
   shove(m, plan!.dir);
   const probe = new PushProbe();
-  probe.begin(m, plan!.dir);
+  probe.begin(m, plan!.dir, wagonCheck(bp).body);
   let done = false;
   for (let i = 0; i < 120 * 8 && !done; i++) {
     sim.step(emptyInput());
@@ -125,5 +125,37 @@ describe('PUSH TEST: the first experiment is real physics', () => {
         expect(v.facts.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  it('measures the lean of the cart, not of a spinning wheel heavier than the body', () => {
+    // Bike wheels outweigh the bucket: the probe used to read a rolling wheel's 180° spin as "tipped right over".
+    const b = new Builder();
+    const bucket = b.free('bucket');
+    b.on('bike_wheel', 'hub', bucket, [0, 0, 0.14], [0, 0, 1]);
+    b.on('bike_wheel', 'hub', bucket, [0, 0, -0.14], [0, 0, -1]);
+    const { result, verdict } = pushTest(b.bp);
+    expect(result.tilt).toBeLessThan(45);
+    expect(verdict.line).not.toMatch(/tipped right over|scraped/);
+  });
+
+  it('wheels on both sides but only at one end: no false "scraped on its side"', () => {
+    const b = new Builder();
+    const pl = b.free('plank');
+    b.on('lawn_wheel', 'hub', pl, [0.45, 0, 0.075], [0, 0, 1]);
+    b.on('lawn_wheel', 'hub', pl, [0.45, 0, -0.075], [0, 0, -1]);
+    const { verdict } = pushTest(b.bp);
+    expect(verdict.line).not.toMatch(/scraped along/);
+  });
+
+  it('never sets the cart down on top of junk or a parked machine', () => {
+    const sim = new Simulation({ project: PROJECT_MAP.build_wagon, gateOpen: false, wagon: false });
+    const first = pushPlan(sim, wagonBlueprint())!;
+    // Something already standing where the first push would start.
+    sim.addMachine(wagonBlueprint(), first.placement);
+    sim.step(emptyInput());
+    const second = pushPlan(sim, wagonBlueprint())!;
+    expect(second).not.toBeNull();
+    expect(second.placement.pos).not.toEqual(first.placement.pos);
+    sim.free();
   });
 });
