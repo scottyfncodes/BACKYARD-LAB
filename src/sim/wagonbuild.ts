@@ -25,6 +25,8 @@ export interface WagonCheck {
   /** Wheel parts stuck on flat, so they can't spin. */
   stuckWheels: number;
   spread: boolean;
+  /** Every wheel is down the same side (no wheels on the other side at all). */
+  oneSide: boolean;
   rolls: boolean;
   handle: number | null;
   ok: boolean;
@@ -152,6 +154,7 @@ export function wagonCheck(bp: Blueprint): WagonCheck {
 
   // Spread: wheels on both sides and at both ends, so it doesn't tip.
   let spread = false;
+  let oneSide = false;
   if (body && n >= 2) {
     const side = wheelAxis(bp, spinning[0].uid);
     const fwd = new Vector3(-side.z, 0, side.x);
@@ -169,6 +172,7 @@ export function wagonCheck(bp: Blueprint): WagonCheck {
       if (t < -0.06) b++;
     }
     spread = l > 0 && r > 0 && f > 0 && b > 0;
+    oneSide = !l || !r;
     notes.push({
       id: 'spread',
       done: spread,
@@ -201,7 +205,7 @@ export function wagonCheck(bp: Blueprint): WagonCheck {
   notes.push({ id: 'handle', done: !!handle, text: handle ? `A handle to pull it by: the ${name(handle.uid).toLowerCase()}.` : 'A handle gives me something to pull. Something long, stuck on one end.' });
 
   const ok = !!body && n >= MIN_WHEELS && spread && rolls && !!handle;
-  return { body: body?.uid ?? null, wheels: n, stuckWheels, spread, rolls, handle: handle?.uid ?? null, ok, notes };
+  return { body: body?.uid ?? null, wheels: n, stuckWheels, spread, oneSide, rolls, handle: handle?.uid ?? null, ok, notes };
 }
 
 /** Where everything sits on a finished wagon, so the simulation can tow it and stack cargo on it. */

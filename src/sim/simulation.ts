@@ -184,6 +184,9 @@ export class Simulation implements MachineHost {
     const s = it.spawn;
     if (this.carried?.item === it) this.carried = null;
     it.rb.setTranslation({ x: s.pos[0], y: s.pos[1], z: s.pos[2] }, true);
+    // Back the way it started, too: a kite re-snagged sideways would hang from the wrong point.
+    const q = s.rot ? eulerDeg(s.rot) : new Quaternion().setFromEuler(new Euler(0, (s.rotY ?? 0) * DEG, 0));
+    it.rb.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
     it.rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     it.rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
     const proj = this.objective?.project;

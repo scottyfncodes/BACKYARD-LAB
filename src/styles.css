@@ -963,3 +963,225 @@ body.noting .toasts { top: calc(218px + var(--safe-t)); }
   .card h2.book-h { font-size: 24px; }
   .card p.book-idea { font-size: 15px; }
 }
+
+/* ================================================================ type scale + spacing (new components use these) */
+:root {
+  --fs-xs: 12px;
+  --fs-s: 14px;
+  --fs-m: 16px;
+  --fs-l: 19px;
+  --fs-xl: 24px;
+  --gap-s: 6px;
+  --gap-m: 10px;
+  --gap-l: 16px;
+  --hl: #ffb02e;
+  --build-tint: rgba(42, 143, 224, 0.55);
+  --run-tint: rgba(255, 138, 26, 0.65);
+}
+/* Small captions were too small to read on a phone. */
+.slot .name { font-size: var(--fs-xs); }
+.bin-part { font-size: 11px; }
+.gauge small, .results .facts li { font-size: var(--fs-xs); }
+/* Every close button is a real thumb target. */
+.results-head .btn.close, .book-head .btn.close { min-height: 44px; min-width: 44px; }
+
+/* ================================================================ modes you can tell apart at a glance
+   Building: a cool blueprint edge. Testing: a warm "live" edge and a ribbon. Nothing covers the middle. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.35s ease, box-shadow 0.35s ease;
+}
+body.building::after { opacity: 1; box-shadow: inset 0 0 0 4px var(--build-tint), inset 0 0 60px rgba(42, 143, 224, 0.18); }
+body.running::after, body.experimenting::after { opacity: 1; box-shadow: inset 0 0 0 4px var(--run-tint), inset 0 0 70px rgba(255, 138, 26, 0.2); }
+.mode-ribbon {
+  position: fixed;
+  left: 50%;
+  top: calc(10px + var(--safe-t));
+  transform: translateX(-50%);
+  z-index: 3;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  background: var(--red);
+  color: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 99px;
+  padding: 4px 14px 4px 10px;
+  font-weight: 900;
+  font-size: var(--fs-s);
+  letter-spacing: 0.1em;
+  box-shadow: var(--shadow);
+  pointer-events: none !important;
+}
+.mode-ribbon i { width: 10px; height: 10px; border-radius: 50%; background: #fff; animation: rec 1s ease-in-out infinite; }
+@keyframes rec { 50% { opacity: 0.25; } }
+body.running .mode-ribbon, body.experimenting .mode-ribbon { display: inline-flex; }
+body.experimenting .mode-ribbon { background: var(--blue); }
+body.running.coaching .mode-ribbon, body.experimenting.coaching .mode-ribbon { display: none; }
+
+/* ================================================================ the coach: one card, one next step */
+.coach {
+  position: fixed;
+  left: 50%;
+  top: calc(66px + var(--safe-t));
+  transform: translateX(-50%);
+  width: min(calc(100vw - 20px - var(--safe-l) - var(--safe-r)), 460px);
+  z-index: 4;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--gap-m);
+  align-items: center;
+  background: #fffaf0;
+  border: 3px solid var(--ink);
+  border-radius: 18px;
+  padding: 8px 8px 8px 10px;
+  box-shadow: 0 5px 0 rgba(47, 36, 24, 0.4);
+}
+.coach.fresh { animation: coach-in 0.35s cubic-bezier(0.2, 1.4, 0.4, 1); }
+@keyframes coach-in { from { transform: translate(-50%, -10px) scale(0.94); opacity: 0; } }
+.coach-beat {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  border: 3px solid var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: #d8ecff;
+}
+.coach.beat-test .coach-beat, .coach.beat-watch .coach-beat { background: #ffe1a8; }
+.coach.beat-change .coach-beat { background: #ffd2c4; }
+.coach.beat-use .coach-beat { background: #d6f2d8; }
+.coach-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.coach-body b { font-size: var(--fs-m); line-height: 1.15; }
+.coach-body span { font-size: var(--fs-s); font-weight: 700; line-height: 1.25; opacity: 0.85; }
+.coach-dots { display: flex; gap: 4px; margin-top: 4px; }
+.coach-dots i { width: 14px; height: 6px; border-radius: 3px; background: rgba(47, 36, 24, 0.18); }
+.coach-dots i.done { background: var(--green); }
+.coach-dots i.now { background: var(--orange); width: 22px; }
+.btn.coach-skip { min-width: 44px; min-height: 44px; padding: 0; font-size: var(--fs-s); align-self: start; box-shadow: none; border-width: 2px; background: transparent; }
+/* While the coach is up, it is the checklist: the bench notes and the thoughts make room. */
+body.coaching .wagon-notes { display: none; }
+body.coaching .toasts { top: calc(var(--coach-b, 160px) + 8px); }
+body.coaching.building .thought { top: calc(var(--coach-b, 158px) + 10px); }
+body.coaching .build-status { top: calc(var(--coach-b, 156px) + 8px); }
+
+/* What the coach is pointing at. */
+.coach-hl { position: relative; z-index: 2; animation: coach-hl 1.2s ease-in-out infinite; }
+@keyframes coach-hl {
+  0%, 100% { box-shadow: var(--shadow), 0 0 0 3px #fff, 0 0 0 6px var(--hl); }
+  50% { box-shadow: var(--shadow), 0 0 0 3px #fff, 0 0 0 11px rgba(255, 176, 46, 0.55); }
+}
+.slot.coach-hl { background: #fff1b8; animation: slot-hl 1.2s ease-in-out infinite; }
+/* Inside the slot (the tray clips anything outside), and it never moves: a finger can always land on it. */
+@keyframes slot-hl { 0%, 100% { box-shadow: var(--shadow), inset 0 0 0 4px var(--hl); } 50% { box-shadow: var(--shadow), inset 0 0 0 7px rgba(255, 176, 46, 0.6); } }
+.coach-finger {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  font-size: 40px;
+  line-height: 1;
+  pointer-events: none !important;
+  filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.45));
+  animation: finger-drag 2.6s ease-in-out infinite;
+}
+@keyframes finger-drag {
+  0% { transform: translate(var(--x0), var(--y0)) translate(-30%, 10%) scale(1); opacity: 0; }
+  12% { transform: translate(var(--x0), var(--y0)) translate(-30%, 10%) scale(1); opacity: 1; }
+  22% { transform: translate(var(--x0), var(--y0)) translate(-30%, 10%) scale(0.85); opacity: 1; }
+  70% { transform: translate(var(--x1), var(--y1)) translate(-30%, 10%) scale(0.85); opacity: 1; }
+  80% { transform: translate(var(--x1), var(--y1)) translate(-30%, 10%) scale(1); opacity: 1; }
+  100% { transform: translate(var(--x1), var(--y1)) translate(-30%, 10%) scale(1); opacity: 0; }
+}
+
+/* ================================================================ Mission 0: the push test card */
+.push-card {
+  position: fixed;
+  left: 50%;
+  bottom: calc(14px + var(--safe-b));
+  transform: translateX(-50%) rotate(-0.5deg);
+  width: min(calc(100vw - 20px - var(--safe-l) - var(--safe-r)), 440px);
+  background: var(--paper);
+  border: 4px solid var(--ink);
+  border-radius: 20px;
+  padding: 10px 14px 12px;
+  box-shadow: 0 6px 0 rgba(47, 36, 24, 0.4);
+  z-index: 3;
+  animation: slide-up 0.3s ease-out;
+}
+.push-head { display: flex; align-items: center; gap: 8px; font-weight: 900; font-size: var(--fs-s); letter-spacing: 0.06em; }
+.push-tag { background: var(--blue); color: #fff; border: 2px solid var(--ink); border-radius: 99px; padding: 1px 8px; font-size: 11px; letter-spacing: 0.12em; }
+.push-line { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0 4px; font-size: var(--fs-m); font-weight: 800; line-height: 1.3; }
+.push-line i { font-style: normal; font-size: 22px; line-height: 1; }
+.push-line.watching { opacity: 0.8; }
+.push-facts { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.push-facts span { font-size: var(--fs-xs); font-weight: 800; opacity: 0.75; }
+.push-facts span::before { content: '📏 '; }
+.push-next { margin: 6px 0 0; font-size: var(--fs-s); font-weight: 800; font-style: italic; opacity: 0.85; }
+.push-card .row { display: flex; gap: 8px; margin-top: 10px; }
+.push-card .row .btn { flex: 1 1 0; min-height: 48px; }
+.btn.blue.test-btn { background: var(--blue); }
+.bench-go .btn.test-btn { min-width: 200px; }
+
+/* ================================================================ phones in landscape: the coach sits between the corners */
+@media (max-height: 480px) {
+  .coach { top: calc(6px + var(--safe-t)); width: min(46vw, 420px); padding: 5px 6px 5px 8px; gap: 8px; border-radius: 14px; }
+  .coach-beat { width: 36px; height: 36px; font-size: 18px; border-radius: 10px; }
+  .coach-body b { font-size: var(--fs-s); }
+  .coach-body span { font-size: var(--fs-xs); }
+  .coach-dots { display: none; }
+  .mode-ribbon { top: auto; bottom: calc(10px + var(--safe-b)); }
+  .push-card { width: min(56vw, 440px); left: auto; right: calc(10px + var(--safe-r)); transform: none; bottom: calc(10px + var(--safe-b)); padding: 6px 12px 8px; }
+  .push-line { font-size: var(--fs-s); margin: 4px 0 2px; }
+  .push-card .row .btn { min-height: 44px; }
+  .bench-go .btn.test-btn { min-width: 160px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coach.fresh, .coach-hl, .slot.coach-hl, .mode-ribbon i { animation: none; }
+  .coach-hl { box-shadow: var(--shadow), 0 0 0 3px #fff, 0 0 0 6px var(--hl); }
+}
+
+/* ================================================================ overlap fixes (landscape phones) */
+@media (max-height: 480px) {
+  /* The thought bubble used to sit right on the "drag to move" hint. */
+  body:not(.building) .thought { bottom: calc(52px + var(--safe-b)); }
+  /* …and in build mode, under the wagon notes. Side by side instead. */
+  body.building.noting:not(.coaching) .thought { left: calc(min(260px, 40vw) + 24px + var(--safe-l)); max-width: calc(100vw - min(260px, 40vw) - 210px); }
+}
+
+/* ================================================================ cards: the main button is never below the fold */
+.card.brief > .row:last-child,
+.card.hints > .row:last-child {
+  position: sticky;
+  bottom: -18px;
+  margin: 10px -22px -18px;
+  padding: 10px 22px 14px;
+  background: linear-gradient(to bottom, rgba(255, 246, 227, 0), var(--paper) 30%);
+  z-index: 1;
+}
+@media (max-height: 480px) {
+  .card.brief { padding-top: 12px; }
+  .brief h1 { font-size: 28px; }
+  .card.brief p { font-size: 15px; margin: 3px 0; }
+  .card.brief .label { margin-top: 8px; }
+  .card.brief .goals li { font-size: 15px; margin: 2px 0; }
+  .card.brief .bin-part img { width: 40px; height: 40px; }
+  .card.brief p.loop { display: none; }
+  .card.brief > .row:last-child, .card.hints > .row:last-child { bottom: -12px; margin: 8px -16px -12px; padding: 8px 16px 10px; }
+}
+/* The left action column (TEST / BUILD / TURN) sits under the coach card when both are up. */
+body.coaching .actions.lefttop { top: calc(var(--coach-b, 158px) + 10px); }
+@media (max-height: 480px) {
+  body.coaching .actions.lefttop { top: calc(70px + var(--safe-t)); }
+}
+/* Narrow phones: the ribbon goes under the top bar so a long project name never runs into it. */
+@media (max-width: 600px) and (min-height: 481px) {
+  .mode-ribbon { top: calc(66px + var(--safe-t)); }
+}

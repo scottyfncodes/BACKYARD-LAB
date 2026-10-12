@@ -19,6 +19,8 @@ export interface SaveData {
   wagon: Blueprint | null;
   /** Mom's PHYSICS 101: found on the shelf yet, which chapters have come unstuck, and which have been opened. */
   book: { found: boolean; revealed: string[]; read: string[] };
+  /** The first-play coach: finished (or skipped) for good. Replaying it from the menu clears this. */
+  tutorial: { done: boolean };
   session: SessionData | null;
 }
 
@@ -58,6 +60,7 @@ export function defaultSave(): SaveData {
     hintsSeen: {},
     wagon: null,
     book: { found: false, revealed: [], read: [] },
+    tutorial: { done: false },
     session: null,
   };
 }
@@ -126,6 +129,10 @@ export function parseSave(raw: string | null): SaveData {
     // Anything already read has obviously come unstuck, and a found book always opens at its first chapters.
     if (d.book.found) for (const id of [...CHAPTERS.filter((c) => c.unlock.withBook).map((c) => c.id), ...d.book.read]) if (!d.book.revealed.includes(id)) d.book.revealed.push(id);
   }
+  // Anyone who already got past Mission 0 doesn't need walking through it again.
+  const t = j.tutorial as Record<string, unknown> | undefined;
+  // (Only for saves from before the tutorial existed: a replay in progress after Mission 0 must survive a reload.)
+  d.tutorial.done = t && typeof t === 'object' ? t.done === true : !!d.completed[FIRST_PROJECT];
   d.session = parseSession(j.session);
   return d;
 }
@@ -214,6 +221,8 @@ export function completeProject(save: SaveData, projectId: string, time: number,
   };
   const projects = p.unlocks.filter((id) => !save.unlocked.includes(id));
   save.unlocked.push(...projects);
+  // Mission 0 done is the first-build tutorial done: build, test, change, use.
+  if (p.deliverable === 'wagon') save.tutorial.done = true;
   const sandbox = !save.sandbox && p.unlocksSandbox !== false;
   if (sandbox) save.sandbox = true;
   return { projects, sandbox };

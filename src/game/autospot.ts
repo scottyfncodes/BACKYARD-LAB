@@ -22,8 +22,8 @@ export interface Area {
   zone?: string;
 }
 
-/** Does the machine overlap walls, fences, trees...? */
-export function machineFits(sim: Simulation, bp: Blueprint, pl: MachinePlacement): boolean {
+/** Does the machine overlap walls, fences, trees...? (Or, with `filter`, anything else: junk, parked machines, the wagon.) */
+export function machineFits(sim: Simulation, bp: Blueprint, pl: MachinePlacement, filter: number = groups(0xffff, GROUP.STATIC)): boolean {
   const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), pl.yaw);
   const base = new Vector3(...pl.pos);
   for (const p of bp.parts) {
@@ -43,7 +43,7 @@ export function machineFits(sim: Simulation, bp: Blueprint, pl: MachinePlacement
           return false;
         },
         undefined,
-        groups(0xffff, GROUP.STATIC),
+        filter,
       );
       if (hit) return false;
     }

@@ -70,7 +70,13 @@ export class ActionBar {
     const key = actions.map((a) => `${a.id}|${a.label}|${a.cls ?? ''}`).join(';');
     if (key === this.key) return;
     this.key = key;
-    this.el.replaceChildren(...actions.map((a) => btn(a.label, () => this.handlers.get(a.id)?.(), a.cls ?? '')));
+    this.el.replaceChildren(
+      ...actions.map((a) => {
+        const b = btn(a.label, () => this.handlers.get(a.id)?.(), a.cls ?? '');
+        b.dataset.act = a.id;
+        return b;
+      }),
+    );
   }
 }
 

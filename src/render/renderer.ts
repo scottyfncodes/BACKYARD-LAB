@@ -14,10 +14,11 @@ export function detectQuality(): Quality {
   if (q === 'low') return { mobile, pixelRatio: 1, shadows: false, shadowSize: 512, grass: 0 };
   return {
     mobile,
-    pixelRatio: Math.min(window.devicePixelRatio || 1, mobile ? 2 : 2),
+    // Phones: 1.6× is still crisp on a 3× screen at well under half the pixels to shade.
+    pixelRatio: Math.min(window.devicePixelRatio || 1, mobile ? 1.6 : 2),
     shadows: true,
     shadowSize: mobile ? 1024 : 2048,
-    grass: mobile ? 7000 : 16000,
+    grass: mobile ? 5000 : 16000,
   };
 }
 
@@ -34,7 +35,7 @@ export class Renderer {
     public canvas: HTMLCanvasElement,
     public quality: Quality,
   ) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !quality.mobile || quality.pixelRatio < 2, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !quality.mobile || (window.devicePixelRatio || 1) < 2, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(quality.pixelRatio);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;

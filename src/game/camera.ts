@@ -28,6 +28,8 @@ export class CameraDirector {
   private chasePos = new THREE.Vector3();
   private chaseLook = new THREE.Vector3();
   orbit = { yaw: 0.8, pitch: 0.55, dist: 6, center: new THREE.Vector3() };
+  /** A gentle swing of the orbit toward this yaw (cancelled the moment the player turns the view themselves). */
+  yawGoal: number | null = null;
   intro = { p: new THREE.Vector3(), look: new THREE.Vector3() };
   private lastHeading = new THREE.Vector3(0, 0, 1);
 
@@ -90,6 +92,11 @@ export class CameraDirector {
       case 'bench': {
         const o = this.orbit;
         if (this.mode === 'free') o.center.lerp(subject, 1 - Math.exp(-dt * 3));
+        if (this.yawGoal !== null) {
+          const d = Math.atan2(Math.sin(this.yawGoal - o.yaw), Math.cos(this.yawGoal - o.yaw));
+          o.yaw += d * (1 - Math.exp(-dt * 5));
+          if (Math.abs(d) < 0.01) this.yawGoal = null;
+        }
         p = new THREE.Vector3(Math.sin(o.yaw) * Math.cos(o.pitch), Math.sin(o.pitch), Math.cos(o.yaw) * Math.cos(o.pitch)).multiplyScalar(o.dist).add(o.center);
         p.y = Math.max(p.y, 0.25);
         q = this.lookQuat(p, o.center);
