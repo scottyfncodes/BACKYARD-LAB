@@ -20,6 +20,9 @@ export class Trail {
   private q = new THREE.Quaternion();
   private s = new THREE.Vector3();
   private grow: number[] = [];
+  /** Beads before this one have finished popping in. */
+  private growFrom = 0;
+  private tmp = new THREE.Vector3();
 
   constructor(scene: THREE.Scene, color = 0xfff1a8) {
     // Little beads: readable from any angle, on the floor or up in the air.
@@ -47,6 +50,7 @@ export class Trail {
     this.dots.count = 0;
     this.last = null;
     this.grow = [];
+    this.growFrom = 0;
     this.tag.visible = false;
     this.group.visible = false;
   }
@@ -94,11 +98,12 @@ export class Trail {
     if (!this.group.visible) return;
     // New dots pop in, so the path draws itself behind the machine.
     let dirty = false;
-    for (let i = 0; i < this.n; i++) {
+    while (this.growFrom < this.n && this.grow[this.growFrom] >= 1) this.growFrom++;
+    for (let i = this.growFrom; i < this.n; i++) {
       if (this.grow[i] >= 1) continue;
       this.grow[i] = Math.min(1, this.grow[i] + dt * 6);
       this.dots.getMatrixAt(i, this.m);
-      const pos = new THREE.Vector3().setFromMatrixPosition(this.m);
+      const pos = this.tmp.setFromMatrixPosition(this.m);
       const k = 1 - Math.pow(1 - this.grow[i], 3);
       this.m.compose(pos, this.q.identity(), this.s.setScalar(Math.max(0.01, k)));
       this.dots.setMatrixAt(i, this.m);

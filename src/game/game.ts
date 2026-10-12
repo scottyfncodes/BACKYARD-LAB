@@ -120,6 +120,9 @@ export class Game {
   private coachKey = '';
   private coachT = 0;
   private coachHl: Element[] = [];
+  private coachBottom = '';
+  private coachSize = '';
+  private fingerKey = '';
   private coachView: CoachView | null = null;
   private beacon!: Beacon;
   private trail!: Trail;
@@ -1077,6 +1080,14 @@ export class Game {
       if (fresh && v.n > 1) this.audio.play('ui');
     }
     this.highlight(v.target.ui ?? null);
+    // Whatever sits under the card (thoughts, toasts, the left buttons) starts where the card actually ends.
+    // (Measured only when the card or the screen changes, so the tick never forces a layout for nothing.)
+    const size = `${key}|${window.innerWidth}x${window.innerHeight}`;
+    if (size !== this.coachSize) {
+      this.coachSize = size;
+      const bottom = `${Math.round(this.coachEl.getBoundingClientRect().bottom)}px`;
+      if (bottom !== this.coachBottom) document.body.style.setProperty('--coach-b', (this.coachBottom = bottom));
+    }
     // Places in the yard get a beacon you can see from anywhere.
     const where = v.target.world;
     const w = this.sim.wagon;
@@ -1108,11 +1119,14 @@ export class Game {
     }
     const a = from.getBoundingClientRect();
     const b = BENCH_ORIGIN.clone().setY(BENCH_ORIGIN.y + 0.05).project(this.r.camera);
-    const st = this.coachFinger.style;
-    st.setProperty('--x0', `${a.left + a.width / 2}px`);
-    st.setProperty('--y0', `${a.top + a.height / 2}px`);
-    st.setProperty('--x1', `${((b.x + 1) / 2) * window.innerWidth}px`);
-    st.setProperty('--y1', `${((1 - b.y) / 2) * window.innerHeight}px`);
+    const pts = [a.left + a.width / 2, a.top + a.height / 2, ((b.x + 1) / 2) * window.innerWidth, ((1 - b.y) / 2) * window.innerHeight].map(Math.round);
+    // Only touch the styles when something actually moved.
+    const key = pts.join(',');
+    if (key !== this.fingerKey) {
+      this.fingerKey = key;
+      const st = this.coachFinger.style;
+      ['--x0', '--y0', '--x1', '--y1'].forEach((k, i) => st.setProperty(k, `${pts[i]}px`));
+    }
     this.coachFinger.classList.remove('hidden');
   }
 
@@ -2191,8 +2205,8 @@ export class Game {
     if (this.coachT <= 0) {
       this.coachT = 0.12;
       this.updateCoach();
+      this.placeFinger();
     }
-    this.placeFinger();
     this.beacon.update(dt, this.reducedMotion.matches);
     this.trail.update(dt);
     this.updateAudio(dt);

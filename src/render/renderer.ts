@@ -35,7 +35,7 @@ export class Renderer {
     public canvas: HTMLCanvasElement,
     public quality: Quality,
   ) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !quality.mobile || quality.pixelRatio < 2, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !quality.mobile || (window.devicePixelRatio || 1) < 2, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(quality.pixelRatio);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
