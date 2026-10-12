@@ -131,7 +131,8 @@ export function parseSave(raw: string | null): SaveData {
   }
   // Anyone who already got past Mission 0 doesn't need walking through it again.
   const t = j.tutorial as Record<string, unknown> | undefined;
-  d.tutorial.done = (t && typeof t === 'object' && t.done === true) || !!d.completed[FIRST_PROJECT];
+  // (Only for saves from before the tutorial existed: a replay in progress after Mission 0 must survive a reload.)
+  d.tutorial.done = t && typeof t === 'object' ? t.done === true : !!d.completed[FIRST_PROJECT];
   d.session = parseSession(j.session);
   return d;
 }

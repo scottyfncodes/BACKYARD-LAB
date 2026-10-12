@@ -10,9 +10,11 @@ const fresh = (o: Partial<CoachSnapshot> = {}): CoachSnapshot => ({
   touch: true,
   check: null,
   benchParts: 0,
+  nearBench: false,
   holding: null,
   pushing: false,
   pushes: 0,
+  pushedBefore: false,
   pushReset: false,
   lastPush: null,
   wagonOut: false,
@@ -72,6 +74,25 @@ describe('the first-build coach follows the real game, step by step', () => {
     expect(id({ ...s, lastPush: 'rolled' })).toBe('rollout');
   });
 
+  it('a change after a push makes it untested again: test it again before rolling out', () => {
+    // The game reports pushes for the machine as it is now; after a change that's 0, but a push did happen.
+    const bp = wagonBlueprint();
+    const changed = fresh({ mode: 'build', benchParts: 6, check: wagonCheck(bp), pushes: 0, pushedBefore: true, lastPush: null, pushReset: true });
+    const v = coachStep(changed)!;
+    expect(v.step.id).toBe('push');
+    expect(v.title).toMatch(/again/);
+  });
+
+  it('names the button that is actually on screen: BUILD right by the bench, BENCH anywhere else', () => {
+    expect(coachStep(fresh({ nearBench: true }))!.tip).toMatch(/🔧 BUILD/);
+    expect(coachStep(fresh({ nearBench: false }))!.tip).toMatch(/🔧 BENCH/);
+    expect(coachStep(fresh({ nearBench: true, touch: false }))!.tip).toMatch(/Press E/);
+  });
+
+  it('ropes are tied, not placed, and the tip says so', () => {
+    expect(coachStep(fresh({ mode: 'build', holding: 'rope' }))!.tip).toMatch(/TIE/);
+  });
+
   it('while a part is in hand, it points at PLACE instead of the parts bin', () => {
     const v = coachStep(fresh({ mode: 'build', holding: 'plank' }))!;
     expect(v.step.id).toBe('body');
@@ -119,5 +140,12 @@ describe('tutorial progress in the save', () => {
     const mid = parseSave(JSON.stringify({ v: 1, wagon: wagonBlueprint() }));
     expect(mid.tutorial.done).toBe(false);
     expect(parseSave(JSON.stringify({ v: 1, tutorial: 'yes' })).tutorial.done).toBe(false);
+  });
+
+  it('a replay started after Mission 0 survives a reload', () => {
+    const s = defaultSave();
+    s.completed.build_wagon = { bestTime: 60, bonuses: [] };
+    s.tutorial.done = false;
+    expect(parseSave(JSON.stringify(s)).tutorial.done).toBe(false);
   });
 });

@@ -108,6 +108,9 @@ export class Game {
   private pushes = 0;
   private pushReset = false;
   private lastPush: PushVerdict['mood'] | null = null;
+  /** Which machine the last push was of: change anything and it hasn't been tested yet. */
+  private pushSig = '';
+  private benchSig = '';
   private everHitched = false;
   /** What the bench thinks of the wagon on it (kept up to date as parts go on and off). */
   private benchCheck: WagonCheck | null = null;
@@ -483,7 +486,7 @@ export class Game {
       h('h2', {}, 'Settings'),
       h('div', { class: 'setting' }, 'Sound', sound),
       h('div', { class: 'setting' }, 'Thoughts & hints', hints),
-      h('div', { class: 'setting' }, 'First-build tutorial', tutorial),
+      ...(this.mode === 'title' || this.wagonMission() ? [h('div', { class: 'setting' }, 'First-build tutorial', tutorial)] : []),
       h('div', { class: 'setting' }, 'Look speed', sens),
       h(
         'p',
@@ -505,7 +508,8 @@ export class Game {
     rows.append(btn('📋 Projects', () => this.showProjects(() => this.showMenu())));
     if (this.save.sandbox && !this.sandbox) rows.append(btn('🧪 Sandbox', () => this.startSandbox()));
     rows.append(btn('📓 Lab Notebook', () => this.showNotebook(() => this.showMenu())));
-    rows.append(btn('🎓 Replay the tutorial', () => this.replayTutorial()));
+    // Replaying starts THE WAGON over, so it is only offered there (and on the title screen): it never wipes another project's session.
+    if (this.wagonMission()) rows.append(btn('🎓 Replay the tutorial', () => this.replayTutorial()));
     rows.append(btn('⚙ Settings', () => this.showSettings(() => this.showMenu())));
     rows.append(btn('🏠 Title', () => {
       this.persist();
@@ -541,6 +545,7 @@ export class Game {
     this.pushes = 0;
     this.pushReset = false;
     this.lastPush = null;
+    this.pushSig = '';
     this.everHitched = false;
     this.refreshBenchCheck(this.bench);
     this.persist();
@@ -941,6 +946,7 @@ export class Game {
     this.push = { probe, done: false };
     this.ribbonText.textContent = 'EXPERIMENT';
     this.pushes++;
+    this.pushSig = this.benchSig;
     this.journal.begin(this.sim);
     this.trail.clear();
     const at = m.center();
@@ -1009,6 +1015,7 @@ export class Game {
 
   private refreshBenchCheck(bp: Blueprint) {
     this.benchCheck = this.wagonMission() && !this.sim.wagon && bp.parts.length ? wagonCheck(bp) : null;
+    this.benchSig = JSON.stringify([bp.parts.map((p) => [p.def, p.p, p.q]), bp.links]);
   }
 
   private coachSnapshot(): CoachSnapshot {
@@ -1018,11 +1025,14 @@ export class Game {
       touch: this.input.touchMode,
       check: this.benchCheck,
       benchParts: (this.mode === 'build' ? this.build.bp : this.bench).parts.length,
+      nearBench: this.mode !== 'build' && !!this.sim.player && this.nearBench(),
       holding: this.mode === 'build' ? this.build.holdingDef : null,
       pushing: !!this.push,
-      pushes: this.pushes,
+      // A push only counts for the machine as it is: change one thing and it's untested again.
+      pushes: this.pushSig === this.benchSig ? this.pushes : 0,
+      pushedBefore: this.pushes > 0,
       pushReset: this.pushReset,
-      lastPush: this.lastPush,
+      lastPush: this.pushSig === this.benchSig ? this.lastPush : null,
       wagonOut: !!w,
       everHitched: this.everHitched,
       hitched: !!w?.hitched,
@@ -1232,6 +1242,8 @@ export class Game {
       // The bench is one tap away from anywhere: ideas should not wait on a long walk.
       a.push({ id: 'bench', label: `🔧 BENCH${k('B')}`, onPress: () => this.goToBench() });
     }
+    // While the coach is asking for the bench, its button is always there, whatever the kid happens to be looking at.
+    if (this.coaching() && !this.running && !wagon && !a.some((x) => x.id === 'build' || x.id === 'bench')) a.push({ id: 'bench', label: `🔧 BENCH${k('B')}`, onPress: () => this.goToBench() });
     if (wagon?.hitched) a.push({ id: 'unhitch', label: `✋ LET GO${k('P')}`, onPress: () => this.toggleHitch() });
     if (touch && !(this.running && this.driving && this.anyReceiver())) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
     return a;

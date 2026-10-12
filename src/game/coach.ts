@@ -16,15 +16,19 @@ export interface CoachSnapshot {
   /** What the bench thinks of the machine on it (null: nothing on the bench, or the wagon is already out). */
   check: WagonCheck | null;
   benchParts: number;
+  /** Close enough to the bench that its button says BUILD. */
+  nearBench: boolean;
   /** The part in hand at the bench, if any. */
   holding: string | null;
   /** A push test is running or showing its result. */
   pushing: boolean;
-  /** How many push tests have been started. */
+  /** How many push tests have been started on the machine as it is now (a change starts the count over). */
   pushes: number;
+  /** Any push test at all this mission, for "push it AGAIN". */
+  pushedBefore: boolean;
   /** A push test has been reset at least once. */
   pushReset: boolean;
-  /** How the last push went. */
+  /** How the last push of the machine as it is now went. */
   lastPush: PushVerdict['mood'] | null;
   wagonOut: boolean;
   everHitched: boolean;
@@ -59,10 +63,13 @@ const PLACE = '.place-bar .btn.go';
 const note = (s: CoachSnapshot, ...ids: string[]) => s.check?.notes.find((n) => ids.includes(n.id as string) && !n.done)?.text ?? null;
 const atBench = (s: CoachSnapshot) => s.mode === 'build';
 /** With a part in hand, the next move is always the same: put it where it goes. */
-const placing = (s: CoachSnapshot, what: string): { tip: string; target: CoachTarget } | null =>
-  s.holding
-    ? { tip: s.touch ? `Drag the glowing ${what} where it should join, then tap ✔ PLACE.` : `Move the glowing ${what} where it should join, then click (or ✔ PLACE).`, target: { ui: PLACE } }
-    : null;
+const LINKS = new Set(['rope', 'bungee', 'spring']);
+const placing = (s: CoachSnapshot, what: string): { tip: string; target: CoachTarget } | null => {
+  if (!s.holding) return null;
+  // Ropes and the like are tied end to end, and their button says so.
+  if (LINKS.has(s.holding)) return { tip: 'Tap where one end goes, then ✔ TIE END; then the other end and ✔ TIE HERE.', target: { ui: PLACE } };
+  return { tip: s.touch ? `Drag the glowing ${what} where it should join, then tap ✔ PLACE.` : `Move the glowing ${what} where it should join, then click (or ✔ PLACE).`, target: { ui: PLACE } };
+};
 
 export const WAGON_STEPS: CoachStep[] = [
   // While a push test is on, watching it is the only thing that matters.
@@ -80,7 +87,10 @@ export const WAGON_STEPS: CoachStep[] = [
     beat: 'build',
     done: (s) => atBench(s) || s.wagonOut,
     title: (s) => (s.benchParts ? 'Back to the workbench' : 'Head to the workbench'),
-    tip: (s) => (s.touch ? 'Tap 🔧 BENCH. Your parts bin is waiting there.' : 'Press B (or click 🔧 BENCH). Your parts bin is waiting there.'),
+    tip: (s) => {
+      const label = s.nearBench ? '🔧 BUILD' : '🔧 BENCH';
+      return s.touch ? `Tap ${label}. Your parts bin is waiting there.` : `Press ${s.nearBench ? 'E' : 'B'} (or click ${label}). Your parts bin is waiting there.`;
+    },
     // The button takes you there in one tap; the beacon shows where "there" is.
     target: () => ({ ui: '.actions [data-act="bench"], .actions [data-act="build"]', world: 'lab' }),
   },
@@ -112,8 +122,8 @@ export const WAGON_STEPS: CoachStep[] = [
     id: 'push',
     beat: 'test',
     done: (s) => s.wagonOut || s.pushes > 0,
-    title: () => 'Experiment: does it roll?',
-    tip: () => 'Tap 👉 PUSH TEST. It goes on the floor and gets a real shove.',
+    title: (s) => (s.pushedBefore ? 'Changed it? Test it again' : 'Experiment: does it roll?'),
+    tip: (s) => (s.pushedBefore ? 'Tap 👉 PUSH TEST and see what the change did.' : 'Tap 👉 PUSH TEST. It goes on the floor and gets a real shove.'),
     target: () => ({ ui: '[data-act="push"]' }),
   },
   {
@@ -146,12 +156,14 @@ export const WAGON_STEPS: CoachStep[] = [
     beat: 'use',
     done: (s) => s.load >= 3 || s.solved,
     title: (s) => `Load 3 things from the junk pile · ${Math.min(3, s.load)}/3`,
-    tip: (s) =>
-      s.carrying
-        ? 'Tap 🛒 IN WAGON while it’s close.'
+    tip: (s) => {
+      const key = s.touch ? '' : ' (or press L)';
+      return s.carrying
+        ? `Tap 🛒 IN WAGON${key} while it’s close.`
         : s.hitched
-          ? 'Pull it to the glowing pile by the garage, look at a part and tap 🛒 TO WAGON.'
-          : 'Bring the wagon close, look at a part and tap 🛒 TO WAGON.',
+          ? `Pull it to the glowing pile by the garage, look at a part and tap 🛒 TO WAGON${key}.`
+          : `Bring the wagon close, look at a part and tap 🛒 TO WAGON${key}.`;
+    },
     target: (s) => ({ ui: '.actions [data-act="load"]', world: s.carrying ? 'wagon' : 'junk' }),
   },
   {
