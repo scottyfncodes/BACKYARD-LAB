@@ -70,6 +70,7 @@ export class Game {
   private last = performance.now();
   private time = 0;
   private frameDt = 1 / 60;
+  private powerHtml = '';
   private yaw = 0;
   private pitch = 0;
   private stepT = 0;
@@ -469,8 +470,13 @@ export class Game {
       this.persist();
       this.showSettings(back);
     }, 'small');
+    // On: tap to turn it off. Done or off: tap to play the first build again with it.
     const tutorial = btn(this.save.tutorial.done ? '🎓 Replay' : '🎓 On', () => {
       if (this.save.tutorial.done) this.replayTutorial();
+      else {
+        this.skipTutorial();
+        this.showSettings(back);
+      }
     }, 'small');
     this.modal.show([
       h('h2', {}, 'Settings'),
@@ -943,6 +949,30 @@ export class Game {
     o.dist = 3.6;
     o.pitch = 0.5;
     o.yaw = Math.atan2(plan.dir.z, plan.dir.x) + Math.PI / 2 + 0.25;
+  }
+
+  /**
+   * While a test runs, beads trace the path of the thing that matters: the
+   * target once it is moving (a ball's arc, a kite's fall), else the machine.
+   * They stay after STOP, so the kid can see what happened before changing one thing.
+   */
+  private traceRun() {
+    const t = this.projectId && !this.sandbox ? this.sim.itemByTag('target') : undefined;
+    if (t && toV(t.rb.linvel()).length() > 0.6) {
+      this.trail.add(toV(t.rb.translation()));
+      return;
+    }
+    let best: MachineInstance | null = null;
+    let speed = 0.4;
+    for (const m of this.sim.machines.values()) {
+      if (m.state !== 'running' || m.id === this.testMachine) continue;
+      const v = m.bodies.length ? toV(m.bodies[0].rb.linvel()).length() : 0;
+      if (v > speed) {
+        speed = v;
+        best = m;
+      }
+    }
+    if (best) this.trail.add(best.center());
   }
 
   private updatePush(dt: number) {
@@ -1501,6 +1531,7 @@ export class Game {
     const m = target ?? (look?.kind === 'machine' && candidates.includes(look.machine) ? look.machine : candidates[candidates.length - 1]);
     if (!m) return;
     this.hideResults();
+    this.trail.clear();
     // Something already on the bench gets set down on the garage floor, not thrown away.
     if (this.bench.parts.length) this.parkBench();
     this.benchSpot = this.spots.get(m.id) ?? { placement: m.placement, player: this.feet(), yaw: this.yaw };
@@ -1694,6 +1725,7 @@ export class Game {
     this.hideResults();
     this.probe.begin(this.sim, this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null, this.testMachine);
     this.sim.goAll();
+    this.trail.clear();
     this.running = true;
     document.body.classList.add('running');
     this.ribbonText.textContent = 'TESTING';
@@ -1745,6 +1777,7 @@ export class Game {
   /** Start over: machines back where they were set down, and the target back where it started. */
   private startOver() {
     if (this.running) this.resetRun();
+    this.trail.clear();
     const t = this.sim.itemByTag('target');
     if (t && !this.succeeded && this.sim.carried?.item !== t) this.sim.respawnItem(t);
     this.hideResults();
@@ -1903,6 +1936,8 @@ export class Game {
         const ground = e.mat === 'grass' || e.other === 'grass' || e.mat === 'dirt' || e.other === 'dirt';
         if (e.impulse > 2 && ground) this.fx.emit('dust', e.pos.clone().setY(0.05), Math.min(14, Math.floor(e.impulse)), { speed: Math.min(3, e.impulse / 4) });
         if (e.impulse > 3 && (e.mat === 'metal' || e.other === 'metal')) this.fx.emit('spark', e.pos, 8);
+        // Hard knocks between anything else get a small puff where they met, so a collision reads even with the sound off.
+        else if (e.impulse > 3 && !ground) this.fx.emit('dust', e.pos, Math.min(8, Math.floor(e.impulse / 2)), { speed: 0.8 });
         break;
       }
       case 'break':
@@ -1996,8 +2031,6 @@ export class Game {
     const p = PROJECT_MAP[this.projectId];
     const byMachine = this.running && bonuses.some((b) => b.def.id === 'hands_off' && b.earned);
     const unlocked = completeProject(this.save, this.projectId, time, bonuses.filter((b) => b.earned).map((b) => b.def.id));
-    // Mission 0 done is the tutorial done: build, test, change, use.
-    if (p.deliverable === 'wagon') this.save.tutorial.done = true;
     this.updateCoach(true);
     this.save.session = null;
     writeSave(this.save);
@@ -2172,6 +2205,7 @@ export class Game {
     if (this.running || this.testMachine !== null) {
       this.journal.sample(this.sim, dt);
       if (this.running) this.probe.sample(this.sim, dt);
+      if (this.running) this.traceRun();
       // Everything has come to rest: show what the test found (the machine stays as it ended up).
       if (this.running && this.journal.settled && !this.verdictShown && !this.succeeded && Math.abs(this.lastThrottle) < 0.1) {
         this.verdictShown = true;
@@ -2305,7 +2339,9 @@ export class Game {
     if (pw) {
       const pct = Math.round(pw.charge * 100);
       const low = pw.factor < 0.6 || pct < 10;
-      this.powerChip.innerHTML = `⚡ ${pct}%${pw.factor < 0.99 ? ` <small>only ${Math.round(pw.factor * 100)}% power!</small>` : '<small>battery</small>'}<div class="meter ${low ? 'low' : ''}"><div style="width:${pct}%"></div></div>`;
+      const html = `⚡ ${pct}%${pw.factor < 0.99 ? ` <small>only ${Math.round(pw.factor * 100)}% power!</small>` : '<small>battery</small>'}<div class="meter ${low ? 'low' : ''}"><div style="width:${pct}%"></div></div>`;
+      // Only touch the DOM when the reading changes (it used to re-parse every frame).
+      if (html !== this.powerHtml) this.powerChip.innerHTML = this.powerHtml = html;
     }
     this.updatePrompt();
     const explore = this.mode === 'explore' || this.mode === 'carry';

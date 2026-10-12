@@ -169,7 +169,15 @@ export class Physics {
           const cb = this.world.getCollider(h2);
           const dyn = ta.owner.kind === 'static' ? cb : ca;
           if (dyn) {
-            this.impacts.push({ pos: toV(dyn.translation()), matA: ta.mat, matB: tb.mat, impulse, ownerA: ta.owner, ownerB: tb.owner });
+            // Where they actually touched, so dust and sparks fly from the contact, not from the middle of the part.
+            let pos = toV(dyn.translation());
+            if (ca && cb) {
+              this.world.contactPair(ca, cb, (m) => {
+                const p = m.numSolverContacts() > 0 ? m.solverContactPoint(0) : null;
+                if (p) pos = new Vector3(p.x, p.y, p.z);
+              });
+            }
+            this.impacts.push({ pos, matA: ta.mat, matB: tb.mat, impulse, ownerA: ta.owner, ownerB: tb.owner });
           }
         }
       }

@@ -1582,6 +1582,11 @@ export class BuildMode {
 
   private key(k: string) {
     if (!this.active) return;
+    // Esc during a bench test or push test puts everything back, like ↺ RESET / ■ STOP.
+    if (k === 'escape' && this.testing) {
+      this.stopTest();
+      return;
+    }
     if (k === 'escape') {
       if (this.holding) this.clearHolding();
       else this.select(null);

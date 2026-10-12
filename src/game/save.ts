@@ -220,6 +220,8 @@ export function completeProject(save: SaveData, projectId: string, time: number,
   };
   const projects = p.unlocks.filter((id) => !save.unlocked.includes(id));
   save.unlocked.push(...projects);
+  // Mission 0 done is the first-build tutorial done: build, test, change, use.
+  if (p.deliverable === 'wagon') save.tutorial.done = true;
   const sandbox = !save.sandbox && p.unlocksSandbox !== false;
   if (sandbox) save.sandbox = true;
   return { projects, sandbox };

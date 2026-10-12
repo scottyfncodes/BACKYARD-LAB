@@ -1148,3 +1148,32 @@ body.coaching .build-status { top: calc(156px + var(--safe-t)); }
   .coach.fresh, .coach-hl, .slot.coach-hl, .mode-ribbon i { animation: none; }
   .coach-hl { box-shadow: var(--shadow), 0 0 0 3px #fff, 0 0 0 6px var(--hl); }
 }
+
+/* ================================================================ overlap fixes (landscape phones) */
+@media (max-height: 480px) {
+  /* The thought bubble used to sit right on the "drag to move" hint. */
+  body:not(.building) .thought { bottom: calc(52px + var(--safe-b)); }
+  /* …and in build mode, under the wagon notes. Side by side instead. */
+  body.building.noting:not(.coaching) .thought { left: calc(min(260px, 40vw) + 24px + var(--safe-l)); max-width: calc(100vw - min(260px, 40vw) - 210px); }
+}
+
+/* ================================================================ cards: the main button is never below the fold */
+.card.brief > .row:last-child,
+.card.hints > .row:last-child {
+  position: sticky;
+  bottom: -18px;
+  margin: 10px -22px -18px;
+  padding: 10px 22px 14px;
+  background: linear-gradient(to bottom, rgba(255, 246, 227, 0), var(--paper) 30%);
+  z-index: 1;
+}
+@media (max-height: 480px) {
+  .card.brief { padding-top: 12px; }
+  .brief h1 { font-size: 28px; }
+  .card.brief p { font-size: 15px; margin: 3px 0; }
+  .card.brief .label { margin-top: 8px; }
+  .card.brief .goals li { font-size: 15px; margin: 2px 0; }
+  .card.brief .bin-part img { width: 40px; height: 40px; }
+  .card.brief p.loop { display: none; }
+  .card.brief > .row:last-child, .card.hints > .row:last-child { bottom: -12px; margin: 8px -16px -12px; padding: 8px 16px 10px; }
+}

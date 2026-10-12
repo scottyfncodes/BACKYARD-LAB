@@ -22,7 +22,8 @@ export class Trail {
   private grow: number[] = [];
 
   constructor(scene: THREE.Scene, color = 0xfff1a8) {
-    const disc = new THREE.CircleGeometry(0.035, 12);
+    // Little beads: readable from any angle, on the floor or up in the air.
+    const disc = new THREE.IcosahedronGeometry(0.03, 0);
     this.dots = new THREE.InstancedMesh(disc, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, fog: false }), MAX);
     this.dots.count = 0;
     this.dots.frustumCulled = false;
@@ -50,14 +51,14 @@ export class Trail {
     this.group.visible = false;
   }
 
-  /** Follow a point; drops a dot every few centimetres, lying flat just above whatever it rolled on. */
-  add(p: THREE.Vector3, ground: number) {
+  /** Follow a point; drops a bead every few centimetres. With `ground`, the beads sit on the floor under it. */
+  add(p: THREE.Vector3, ground: number | null = null) {
     this.group.visible = true;
     if (this.last && this.last.distanceToSquared(p) < SPACING * SPACING) return;
     if (this.n >= MAX) return;
     this.last = p.clone();
-    this.q.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
-    this.m.compose(new THREE.Vector3(p.x, ground + 0.012, p.z), this.q, this.s.setScalar(0.01));
+    this.q.identity();
+    this.m.compose(new THREE.Vector3(p.x, ground === null ? p.y : ground + 0.03, p.z), this.q, this.s.setScalar(0.01));
     this.dots.setMatrixAt(this.n, this.m);
     this.grow[this.n] = 0;
     this.n++;
@@ -99,7 +100,7 @@ export class Trail {
       this.dots.getMatrixAt(i, this.m);
       const pos = new THREE.Vector3().setFromMatrixPosition(this.m);
       const k = 1 - Math.pow(1 - this.grow[i], 3);
-      this.m.compose(pos, this.q.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)), this.s.setScalar(Math.max(0.01, k)));
+      this.m.compose(pos, this.q.identity(), this.s.setScalar(Math.max(0.01, k)));
       this.dots.setMatrixAt(i, this.m);
       dirty = true;
     }
