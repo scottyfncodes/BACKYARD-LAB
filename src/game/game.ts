@@ -21,6 +21,7 @@ import { coachStep, type CoachSnapshot, type CoachView } from './coach';
 import { pushPlan, PushProbe, pushVerdict, shove, type PushVerdict } from './pushtest';
 import { partThumb } from '../render/thumbs';
 import { ActionBar, btn, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
+import { icon } from '../ui/icons';
 import { BuildMode, type Stash } from './build';
 import { CameraDirector } from './camera';
 import { autoSpot, machineFits, type Area } from './autospot';
@@ -288,7 +289,7 @@ export class Game {
       onBench: (d: string) => (this.stash.get(d) ?? 0) + this.build.bp.parts.filter((p) => p.def === d).length,
       notes: (bp: Blueprint) => (this.wagonMission() && !this.sim.wagon ? wagonCheck(bp).notes : null),
       get goLabel() {
-        return self.wagonMission() && !self.sim.wagon ? '🛒 ROLL IT OUT' : '🚀 GO FOR IT';
+        return self.wagonMission() && !self.sim.wagon ? 'ROLL IT OUT' : 'GO FOR IT';
       },
       get onBook() {
         return self.save.book.found ? () => self.openBook() : null;
@@ -314,8 +315,8 @@ export class Game {
     this.projectChip.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.powerChip = h('div', { class: 'chip hidden' });
     this.menuBtn = btn('☰', () => this.showMenu(), 'small round');
-    this.hintBtn = btn('💡', () => this.showHints(), 'small round hint-btn');
-    this.bookBtn = btn('📖', () => this.openBook(), 'small round book-btn hidden');
+    this.hintBtn = btn(icon('bulb'), () => this.showHints(), 'small round hint-btn');
+    this.bookBtn = btn(icon('book'), () => this.openBook(), 'small round book-btn hidden');
     this.hudTop = h('div', { class: 'topbar' }, this.projectChip, this.powerChip, h('div', { class: 'spacer' }), this.bookBtn, this.hintBtn, this.menuBtn);
     this.resultsEl = h('div', { class: 'results hidden' });
     this.resultsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -364,17 +365,17 @@ export class Game {
     this.titleGo = () => (act.resume ? this.resume() : this.startProject(act.project!));
     const go = btn(`${act.verb}<small>${act.sub}</small>`, () => this.titleGo?.(), 'go title-go');
     const lock = sandboxLock(s);
-    const icon = (glyph: string, label: string, onPress: () => void, cls = '') => {
+    const dockBtn = (glyph: string, label: string, onPress: () => void, cls = '') => {
       const b = btn(`<span class="ico">${glyph}</span><span class="cap">${label}</span>`, onPress, `title-icon ${cls}`);
       b.setAttribute('aria-label', label);
       return b;
     };
     const sandbox = lock
-      ? icon('🧪<i>🔒</i>', `Solve ${lock}`, () => {
+      ? dockBtn(`${icon('flask')}<i>${icon('lock')}</i>`, `Solve ${lock}`, () => {
           this.audio.play('error');
-          this.toasts.show(`🔒 Solve <b>${lock}</b> to open the sandbox.`, '', 2400);
+          this.toasts.show(`Solve <b>${lock}</b> to open the sandbox.`, '', 2400);
         }, 'locked')
-      : icon('🧪', 'Sandbox', () => this.startSandbox());
+      : dockBtn(icon('flask'), 'Sandbox', () => this.startSandbox());
     sandbox.setAttribute('aria-label', lock ? `Sandbox: locked until you solve ${lock}` : 'Sandbox');
     this.titleEl.replaceChildren(
       h('div', { class: 'title-lockup' }, h('div', { class: 'logo' }, 'BACKYARD', h('span', {}, 'LAB')), h('p', {}, 'A kid. A problem. A yard full of junk.')),
@@ -382,7 +383,7 @@ export class Game {
         'div',
         { class: 'title-dock' },
         go,
-        h('div', { class: 'title-icons' }, icon('📋', 'Projects', () => this.showProjects()), sandbox, icon('📓', 'Notebook', () => this.showNotebook()), icon('⚙', 'Settings', () => this.showSettings(() => this.showTitle()))),
+        h('div', { class: 'title-icons' }, dockBtn(icon('clipboard'), 'Projects', () => this.showProjects()), sandbox, dockBtn(icon('notebook'), 'Notebook', () => this.showNotebook()), dockBtn(icon('gear'), 'Settings', () => this.showSettings(() => this.showTitle()))),
       ),
     );
     this.titleEl.classList.remove('hidden');
@@ -420,7 +421,7 @@ export class Game {
       const unlocked = this.save.unlocked.includes(p.id);
       const done = this.save.completed[p.id];
       const b = btn(
-        `<span>${unlocked ? '' : '🔒 '}${p.title}<br><small class="muted">${unlocked ? p.pitch[0] : 'Solve other projects first'}</small></span><span>${done ? '⭐'.repeat(Math.max(1, done.bonuses.length)) : ''}</span>`,
+        `<span>${unlocked ? '' : `${icon('lock')} `}${p.title}<br><small class="muted">${unlocked ? p.pitch[0] : 'Solve other projects first'}</small></span><span>${done ? '★'.repeat(Math.max(1, done.bonuses.length)) : ''}</span>`,
         () => (unlocked ? this.startProject(p.id) : this.audio.play('error')),
         unlocked ? '' : 'ghost',
       );
@@ -449,11 +450,11 @@ export class Game {
       );
     });
     this.modal.show([
-      h('h2', {}, '📓 Lab Notebook'),
+      h('h2', {}, 'Lab Notebook'),
       h('p', {}, `Junk discovered: ${found}/${total}`),
       h('p', {}, `Bonus stars: ${tb.earned}/${tb.possible}`),
-      h('p', {}, s.book.found ? `📖 Physics 101: ${s.book.revealed.length}/${CHAPTERS.length} chapters unstuck, ${s.book.read.length} read` : '📖 Physics 101: somewhere in the lab…'),
-      ...(s.wagon ? [h('p', {}, `🛒 The wagon: ${s.wagon.parts.length} parts, built by me`)] : []),
+      h('p', {}, s.book.found ? `Physics 101: ${s.book.revealed.length}/${CHAPTERS.length} chapters unstuck, ${s.book.read.length} read` : 'Physics 101: somewhere in the lab…'),
+      ...(s.wagon ? [h('p', {}, `The wagon: ${s.wagon.parts.length} parts, built by me`)] : []),
       ...stages,
       h('div', { class: 'row' }, btn('Back', back)),
     ]);
@@ -466,19 +467,19 @@ export class Game {
       this.input.sensitivity = this.save.settings.sensitivity;
       this.persist();
     });
-    const sound = btn(this.save.settings.sound ? '🔊 On' : '🔇 Off', () => {
+    const sound = btn(this.save.settings.sound ? 'On' : 'Off', () => {
       this.save.settings.sound = !this.save.settings.sound;
       this.audio.setEnabled(this.save.settings.sound);
       this.persist();
       this.showSettings(back);
     }, 'small');
-    const hints = btn(this.save.settings.hints ? '💭 On' : '💭 Off', () => {
+    const hints = btn(this.save.settings.hints ? 'On' : 'Off', () => {
       this.save.settings.hints = !this.save.settings.hints;
       this.persist();
       this.showSettings(back);
     }, 'small');
     // On: tap to turn it off. Done or off: tap to play the first build again with it.
-    const tutorial = btn(this.save.tutorial.done ? '🎓 Replay' : '🎓 On', () => {
+    const tutorial = btn(this.save.tutorial.done ? 'Replay' : 'On', () => {
       if (this.save.tutorial.done) this.replayTutorial();
       else {
         this.skipTutorial();
@@ -508,13 +509,13 @@ export class Game {
     const rows = h('div', { class: 'row', style: 'flex-direction:column' });
     rows.append(btn('▶ Resume', () => this.modal.hide(), 'go'));
     if (!this.sandbox && this.projectId) rows.append(btn('⟲ Restart project', () => this.startProject(this.projectId!, false)));
-    rows.append(btn('📋 Projects', () => this.showProjects(() => this.showMenu())));
-    if (this.save.sandbox && !this.sandbox) rows.append(btn('🧪 Sandbox', () => this.startSandbox()));
-    rows.append(btn('📓 Lab Notebook', () => this.showNotebook(() => this.showMenu())));
+    rows.append(btn('Projects', () => this.showProjects(() => this.showMenu())));
+    if (this.save.sandbox && !this.sandbox) rows.append(btn('Sandbox', () => this.startSandbox()));
+    rows.append(btn('Lab Notebook', () => this.showNotebook(() => this.showMenu())));
     // Replaying starts THE WAGON over, so it is only offered there (and on the title screen): it never wipes another project's session.
-    if (this.wagonMission()) rows.append(btn('🎓 Replay the tutorial', () => this.replayTutorial()));
-    rows.append(btn('⚙ Settings', () => this.showSettings(() => this.showMenu())));
-    rows.append(btn('🏠 Title', () => {
+    if (this.wagonMission()) rows.append(btn('Replay the tutorial', () => this.replayTutorial()));
+    rows.append(btn('Settings', () => this.showSettings(() => this.showMenu())));
+    rows.append(btn('Title screen', () => {
       this.persist();
       this.showTitle();
     }));
@@ -724,7 +725,7 @@ export class Game {
       ),
     );
     const buttons = reopen
-      ? [btn('Back to it', () => this.modal.hide(), 'go'), btn('💡 Hints', () => this.showHints(), 'small')]
+      ? [btn('Back to it', () => this.modal.hide(), 'go'), btn('Hints', () => this.showHints(), 'small')]
       : [btn('Let’s go!', () => this.afterBrief(), 'go')];
     this.modal.show(
       [
@@ -769,7 +770,7 @@ export class Game {
     const more: HTMLElement[] = [];
     if (seen < 4) {
       more.push(
-        btn(`💡 ${labels[seen]}`, () => {
+        btn(labels[seen], () => {
           revealHint(this.save, p.id);
           this.persist();
           this.audio.play('discover');
@@ -777,16 +778,16 @@ export class Game {
         }, 'small blue'),
       );
     } else if (ideasFor(p.id).length) {
-      more.push(btn('📐 Show me a whole machine, step by step', () => this.guideMe(), 'small'));
+      more.push(btn('Show me a whole machine, step by step', () => this.guideMe(), 'small'));
     }
     const back = this.mode === 'build' ? 'Back to the bench' : 'Back to it';
-    if (this.save.book.found) more.push(btn('📖 Physics 101', () => this.openBook(), 'small book-btn'));
+    if (this.save.book.found) more.push(btn('Physics 101', () => this.openBook(), 'small book-btn'));
     this.modal.show(
       [
-        h('div', { class: 'label' }, '💭 WHAT ARE YOU THINKING?'),
+        h('div', { class: 'label' }, 'WHAT ARE YOU THINKING?'),
         nudges,
         picked ? h('p', { class: 'nudge-line' }, `“${picked.line}”`) : h('p', { class: 'muted' }, 'Pick a word. It’s just a thought to chew on.'),
-        h('div', { class: 'label' }, `💡 HINTS${seen ? ` · ${seen} of 4` : ''}`),
+        h('div', { class: 'label' }, `HINTS${seen ? ` · ${seen} of 4` : ''}`),
         seen ? list : h('p', { class: 'muted' }, 'Hints start vague and get more specific. Only if you want them!'),
         h('div', { class: 'row' }, ...more, btn(back, () => this.modal.hide(), 'go')),
       ],
@@ -824,7 +825,7 @@ export class Game {
       // Thinking out loud: a chain of "what ifs", then where the parts are.
       const lines = [...(p.musings ?? [])];
       // The coach card says where to go; without it, the kid says it out loud.
-      if (!this.coaching() && (!Object.keys(this.save.completed).length || p.deliverable === 'wagon')) lines.push('My parts bin is in the lab. Tap 🔧 BENCH to start building.');
+      if (!this.coaching() && (!Object.keys(this.save.completed).length || p.deliverable === 'wagon')) lines.push('My parts bin is in the lab. Tap BENCH to start building.');
       this.clearMusings();
       lines.forEach((line, i) => {
         this.musingTimers.push(window.setTimeout(() => this.mode === 'explore' && !this.modal.open && this.thought.say(line, 4200), 900 + i * 4600));
@@ -848,7 +849,7 @@ export class Game {
     this.input.unlockPointer();
     this.clearMusings();
     if (findBook(this.save)) {
-      this.toasts.show('📖 Found: <b>PHYSICS 101</b>. Mom’s old textbook.', 'new', 3200);
+      this.toasts.show('Found: <b>PHYSICS 101</b>. Mom’s old textbook.', 'new', 3200);
       this.audio.play('discover');
       this.persist();
     }
@@ -867,7 +868,7 @@ export class Game {
     if (!fresh.length) return;
     this.persistSoon();
     if (!announce || !this.save.book.found) return;
-    this.toasts.show(`📖 Pages came unstuck: <b>${fresh.map((id) => CHAPTER_MAP[id].title).join(', ')}</b>`, 'new', 3200);
+    this.toasts.show(`Pages came unstuck: <b>${fresh.map((id) => CHAPTER_MAP[id].title).join(', ')}</b>`, 'new', 3200);
   }
 
   // ================================================================== MISSION 0: the wagon
@@ -904,7 +905,7 @@ export class Game {
     this.pitch = -0.25;
     this.audio.play('attach', new THREE.Vector3(...at.pos));
     this.fx.emit('dust', new THREE.Vector3(at.pos[0], 0.05, at.pos[2]), 16);
-    this.thought.say(this.coaching() ? 'Okay. Moment of truth.' : 'Okay. Moment of truth. Does it roll? Grab the handle: 🛒 PULL.', this.coaching() ? 2500 : 5500);
+    this.thought.say(this.coaching() ? 'Okay. Moment of truth.' : 'Okay. Moment of truth. Does it roll? Grab the handle: PULL.', this.coaching() ? 2500 : 5500);
     this.persist();
     return true;
   }
@@ -1067,13 +1068,13 @@ export class Game {
     if (key !== this.coachKey || force) {
       const fresh = !this.coachKey.startsWith(`${v.step.id}|`);
       this.coachKey = key;
-      const beat = { build: '🔧', test: '🧪', watch: '👀', change: '🔁', use: '🛒' }[v.step.beat];
+      const beat = icon(({ build: 'wrench', test: 'flask', watch: 'eye', change: 'loop', use: 'wagon' } as const)[v.step.beat]);
       const dots = h('div', { class: 'coach-dots', 'aria-label': `Step ${v.n} of ${v.of}` }, ...Array.from({ length: v.of }, (_, i) => h('i', { class: i < v.n - 1 ? 'done' : i === v.n - 1 ? 'now' : '' })));
       const skip = btn('✕', () => this.skipTutorial(), 'small round coach-skip');
       skip.setAttribute('aria-label', 'Skip the tutorial');
       this.coachEl.className = `coach beat-${v.step.beat}${fresh ? ' fresh' : ''}`;
       this.coachEl.replaceChildren(
-        h('div', { class: 'coach-beat', 'aria-hidden': 'true' }, beat),
+        h('div', { class: 'coach-beat', 'aria-hidden': 'true', html: beat }),
         h('div', { class: 'coach-body' }, h('b', {}, v.title), h('span', {}, v.tip), dots),
         skip,
       );
@@ -1218,11 +1219,11 @@ export class Game {
     const sim = this.sim;
     const look = this.lookTarget();
     if (this.mode === 'carry' && this.carrying) {
-      a.push({ id: 'place', label: `📍 PLACE${k('E')}`, cls: this.carrying.valid ? 'primary' : '', onPress: () => this.placeCarried() });
+      a.push({ id: 'place', label: `PLACE${k('E')}`, cls: this.carrying.valid ? 'primary' : '', onPress: () => this.placeCarried() });
       a.push({ id: 'rot', label: `↻ TURN${k('R')}`, onPress: () => this.rotateCarried() });
       const site = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId].site : null;
-      if (site && this.distTo(site.pos) > 3) a.push({ id: 'site', label: `🏃 ${site.label}`, onPress: () => this.goToSite() });
-      if (this.nearBench() && !this.bench.parts.length) a.push({ id: 'tobench', label: '🔧 ON BENCH', onPress: () => this.carriedToBench() });
+      if (site && this.distTo(site.pos) > 3) a.push({ id: 'site', label: site.label, onPress: () => this.goToSite() });
+      if (this.nearBench() && !this.bench.parts.length) a.push({ id: 'tobench', label: 'ON BENCH', onPress: () => this.carriedToBench() });
       if (touch) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
       return a;
     }
@@ -1230,35 +1231,35 @@ export class Game {
     const wagonNear = !!wagon && sim.wagonDistance() < WAGON_REACH;
     if (sim.carried) {
       const it = sim.carried.item;
-      if (wagonNear) a.push({ id: 'load', label: `🛒 IN WAGON${k('L')}`, cls: 'primary', onPress: () => this.loadWagon(it) });
-      a.push({ id: 'throw', label: `🤾 THROW${k('F')}`, onPress: () => this.throwItem() });
-      a.push({ id: 'drop', label: `✋ DROP${k('Q')}`, cls: wagonNear ? '' : 'primary', onPress: () => this.dropItem() });
+      if (wagonNear) a.push({ id: 'load', label: `IN WAGON${k('L')}`, cls: 'primary', onPress: () => this.loadWagon(it) });
+      a.push({ id: 'throw', label: `THROW${k('F')}`, onPress: () => this.throwItem() });
+      a.push({ id: 'drop', label: `DROP${k('Q')}`, cls: wagonNear ? '' : 'primary', onPress: () => this.dropItem() });
     } else if (look?.kind === 'item') {
-      a.push({ id: 'pick', label: `✊ PICK UP${k('E')}`, cls: 'primary', onPress: () => this.pickUp(look.item) });
-      if (wagonNear) a.push({ id: 'load', label: `🛒 TO WAGON${k('L')}`, onPress: () => this.loadWagon(look.item) });
+      a.push({ id: 'pick', label: `PICK UP${k('E')}`, cls: 'primary', onPress: () => this.pickUp(look.item) });
+      if (wagonNear) a.push({ id: 'load', label: `TO WAGON${k('L')}`, onPress: () => this.loadWagon(look.item) });
     } else if (look?.kind === 'wagon' && wagon) {
-      if (!wagon.hitched) a.push({ id: 'hitch', label: `🛒 PULL${k('P')}`, cls: 'primary', onPress: () => this.toggleHitch() });
+      if (!wagon.hitched) a.push({ id: 'hitch', label: `PULL${k('P')}`, cls: 'primary', onPress: () => this.toggleHitch() });
       // Mission 0: the wagon you just built can still go back on the bench to be fixed.
-      if (!wagon.hitched && wagon.bp && this.wagonMission() && !this.succeeded) a.push({ id: 'fixwagon', label: '🔧 FIX IT', onPress: () => this.rebuildWagon() });
+      if (!wagon.hitched && wagon.bp && this.wagonMission() && !this.succeeded) a.push({ id: 'fixwagon', label: 'FIX IT', onPress: () => this.rebuildWagon() });
       if (wagon.load.length) {
-        a.push({ id: 'takeout', label: `✊ TAKE OUT${wagon.hitched ? k('E') : ''}`, cls: wagon.hitched ? 'primary' : '', onPress: () => this.takeFromWagon() });
+        a.push({ id: 'takeout', label: `TAKE OUT${wagon.hitched ? k('E') : ''}`, cls: wagon.hitched ? 'primary' : '', onPress: () => this.takeFromWagon() });
         a.push({ id: 'tip', label: '⤵ TIP OUT', onPress: () => this.tipWagon() });
       }
     } else if (look?.kind === 'machine' && look.machine.state === 'frozen' && look.machine.id !== this.testMachine) {
-      a.push({ id: 'pickm', label: `✊ PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
+      a.push({ id: 'pickm', label: `PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
     } else if (look?.kind === 'static' && look.id === 'physics_book') {
-      a.push({ id: 'read', label: `📖 READ${k('E')}`, cls: 'primary', onPress: () => this.openBook() });
+      a.push({ id: 'read', label: `READ${k('E')}`, cls: 'primary', onPress: () => this.openBook() });
     } else if (this.nearBench()) {
-      a.push({ id: 'build', label: `🔧 BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
+      a.push({ id: 'build', label: `BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
     } else if (this.nearGateFromOutside()) {
-      a.push({ id: 'gate', label: `🔓 OPEN GATE${k('E')}`, cls: 'primary', onPress: () => this.openGate() });
+      a.push({ id: 'gate', label: `OPEN GATE${k('E')}`, cls: 'primary', onPress: () => this.openGate() });
     } else if (!this.running) {
       // The bench is one tap away from anywhere: ideas should not wait on a long walk.
-      a.push({ id: 'bench', label: `🔧 BENCH${k('B')}`, onPress: () => this.goToBench() });
+      a.push({ id: 'bench', label: `BENCH${k('B')}`, onPress: () => this.goToBench() });
     }
     // While the coach is asking for the bench, its button is always there, whatever the kid happens to be looking at.
-    if (this.coaching() && !this.running && !wagon && !a.some((x) => x.id === 'build' || x.id === 'bench')) a.push({ id: 'bench', label: `🔧 BENCH${k('B')}`, onPress: () => this.goToBench() });
-    if (wagon?.hitched) a.push({ id: 'unhitch', label: `✋ LET GO${k('P')}`, onPress: () => this.toggleHitch() });
+    if (this.coaching() && !this.running && !wagon && !a.some((x) => x.id === 'build' || x.id === 'bench')) a.push({ id: 'bench', label: `BENCH${k('B')}`, onPress: () => this.goToBench() });
+    if (wagon?.hitched) a.push({ id: 'unhitch', label: `LET GO${k('P')}`, onPress: () => this.toggleHitch() });
     if (touch && !(this.running && this.driving && this.anyReceiver())) a.push({ id: 'jump', label: '⤒', onPress: () => this.tapJump() });
     return a;
   }
@@ -1270,16 +1271,16 @@ export class Game {
     if (this.running) {
       a.push({ id: 'stop', label: `■ STOP${k('R')}`, cls: 'danger', onPress: () => this.resetRun() });
       if (this.projectId && !this.sandbox) a.push({ id: 'retry', label: `↺ RETRY${k('G')}`, onPress: () => this.retry() });
-      a.push({ id: 'build', label: `🔧 BUILD${k('T')}`, onPress: () => this.tweakMachine() });
-      const camLabel = { eyes: '👀 VIEW', chase: '🎥 VIEW', wide: '🗺 VIEW', free: '✋ VIEW', bench: '🎥 VIEW', intro: '🎥 VIEW' }[this.cam.mode];
+      a.push({ id: 'build', label: `BUILD${k('T')}`, onPress: () => this.tweakMachine() });
+      const camLabel = { eyes: 'VIEW: EYES', chase: 'VIEW: CHASE', wide: 'VIEW: WIDE', free: 'VIEW: FREE', bench: 'VIEW: CHASE', intro: 'VIEW: CHASE' }[this.cam.mode];
       a.push({ id: 'cam', label: `${camLabel}${k('C')}`, onPress: () => this.cycleCamera() });
       if (this.anyReceiver()) {
-        a.push({ id: 'drive', label: this.driving ? `🎮 DRIVING${k('Tab')}` : `🚶 WALKING${k('Tab')}`, onPress: () => this.toggleDrive() });
-        a.push({ id: 'act', label: `⚡ SWITCH${k('X')}`, onPress: () => this.pressAction() });
+        a.push({ id: 'drive', label: this.driving ? `DRIVING${k('Tab')}` : `WALKING${k('Tab')}`, onPress: () => this.toggleDrive() });
+        a.push({ id: 'act', label: `SWITCH${k('X')}`, onPress: () => this.pressAction() });
       }
     } else if (this.frozenMachines().length && this.mode === 'explore') {
       a.push({ id: 'go', label: `▶ TEST${k('G')}`, cls: 'go test-btn', onPress: () => this.go() });
-      a.push({ id: 'tweak', label: `🔧 BUILD${k('T')}`, onPress: () => this.tweakMachine() });
+      a.push({ id: 'tweak', label: `BUILD${k('T')}`, onPress: () => this.tweakMachine() });
       a.push({ id: 'turn', label: `↻ TURN${k('Y')}`, onPress: () => this.turnMachine() });
     }
     if (!this.running && this.replay.available && this.mode === 'explore') a.push({ id: 'replay', label: `⏺ REPLAY${k('V')}`, onPress: () => this.startReplay() });
@@ -1395,7 +1396,7 @@ export class Game {
       this.stash.set(s.part, (this.stash.get(s.part) ?? 0) + 1);
       discover(this.save, s.part);
     }
-    this.toasts.show(`🛒 Unloaded ${load.length} part${load.length === 1 ? '' : 's'} from the wagon into the parts bin`, 'new', 2500);
+    this.toasts.show(`Unloaded ${load.length} part${load.length === 1 ? '' : 's'} from the wagon into the parts bin`, 'new', 2500);
   }
 
   private tapJump() {
@@ -1432,7 +1433,7 @@ export class Game {
     this.stash.set(it.def.id, (this.stash.get(it.def.id) ?? 0) + 1);
     if (discover(this.save, it.def.id)) this.persistSoon();
     this.sim.removeItem(it.id);
-    this.toasts.show(`📦 Found a <b>${it.def.name}</b>. It’s in the parts bin now.`, 'new', 2600);
+    this.toasts.show(`Found a <b>${it.def.name}</b>. It’s in the parts bin now.`, 'new', 2600);
   }
 
   enterBuild() {
@@ -1833,22 +1834,22 @@ export class Game {
       const n = v === null ? 0 : Math.round(v * 10);
       return h('div', { class: `gauge-bar ${v === null ? 'na' : v < 0.45 ? 'low' : v < 0.8 ? 'mid' : 'high'}` }, ...Array.from({ length: 10 }, (_, i) => h('i', { class: i < n ? 'on' : '' })));
     };
-    const rows = r.gauges.map((g) => h('div', { class: 'gauge' }, h('b', {}, g.label), seg(g.value), h('small', {}, g.value === null ? `— ${g.note}` : g.note)));
+    const rows = r.gauges.map((g) => h('div', { class: 'gauge' }, h('b', {}, g.label), seg(g.value), h('small', {}, g.note)));
     const canTweak = [...this.sim.machines.values()].some((m) => m.id !== this.testMachine);
     const parts: Node[] = [
-      h('div', { class: 'results-head' }, h('span', {}, '🔬 TEST RESULTS'), btn('✕', () => this.hideResults(), 'small round close')),
+      h('div', { class: 'results-head' }, h('span', {}, 'TEST RESULTS'), btn('✕', () => this.hideResults(), 'small round close')),
       h('div', { class: 'gauges' }, ...rows),
-      h('div', { class: 'label' }, '👀 WHAT HAPPENED'),
+      h('div', { class: 'label' }, 'WHAT HAPPENED'),
       h('p', { class: 'obs' }, r.observation),
     ];
     // The clues: what the probe measured, so a test that didn't work still says something exact.
     if (r.facts.length && r.mood !== 'worked') parts.push(h('ul', { class: 'facts' }, ...r.facts.map((f) => h('li', {}, f))));
-    if (r.tryNext) parts.push(h('p', { class: 'try' }, `💭 ${r.tryNext}`));
+    if (r.tryNext) parts.push(h('p', { class: 'try' }, r.tryNext));
     // "Why didn't that work?" has a page in Mom's book, and failing is how the kid meets the idea.
     if (r.chapter && r.mood !== 'worked') this.revealChapters([r.chapter], false);
     const bookBtn =
       r.chapter && r.mood !== 'worked'
-        ? btn(this.save.book.found ? `📖 ${CHAPTER_MAP[r.chapter].title}` : '📖 Maybe Mom’s physics book knows?', () => this.openBook(r.chapter), 'small book-link')
+        ? btn(this.save.book.found ? `Physics 101: ${CHAPTER_MAP[r.chapter].title}` : 'Maybe Mom’s physics book knows?', () => this.openBook(r.chapter), 'small book-link')
         : null;
     this.resultsEl.replaceChildren(
       ...parts,
@@ -1861,7 +1862,7 @@ export class Game {
         }, 'small') : null,
         canTweak ? btn('↺ Retry', () => this.retry(), 'small') : null,
         r.fix === 'turn' && canTweak ? btn(`↻ Turn it toward the ${this.projectId ? PROJECT_MAP[this.projectId].target : 'target'}`, () => this.turnMachine(true), 'small primary') : null,
-        canTweak ? btn('🔧 Back to build', () => this.tweakMachine(), r.fix ? 'small' : 'small primary') : null,
+        canTweak ? btn('Back to build', () => this.tweakMachine(), r.fix ? 'small' : 'small primary') : null,
         bookBtn,
       ),
     );
@@ -1930,7 +1931,7 @@ export class Game {
     this.cam.set('free');
     this.actions.set([
       { id: 'stopreplay', label: '■ STOP', cls: 'danger', onPress: () => this.stopReplay() },
-      { id: 'slow', label: '🐢 SLOW-MO', onPress: () => (this.replay.speed = this.replay.speed === 1 ? 0.3 : 1) },
+      { id: 'slow', label: 'SLOW-MO', onPress: () => (this.replay.speed = this.replay.speed === 1 ? 0.3 : 1) },
     ]);
     this.leftActions.set([]);
   }
@@ -2052,7 +2053,7 @@ export class Game {
   private found(part: string) {
     if (!discover(this.save, part)) return;
     const d = getPart(part);
-    this.toasts.show(`✨ Found: <b>${d.name}</b> — ${d.traits.join(', ')}`, 'new', 3200);
+    this.toasts.show(`Found: <b>${d.name}</b>. ${d.traits.join(', ')}`, 'new', 3200);
     this.audio.play('discover');
     this.persistSoon();
   }
@@ -2081,12 +2082,12 @@ export class Game {
         h('p', {}, wagon ? 'The wagon works. It’s mine now: it rolls along behind me in every project from here on.' : byMachine ? `The ${p.target} is back, and a machine you made did it.` : `The ${p.target} is back. However you did it, it counts.`),
         ...bonuses.map((b) => h('div', { class: `bonus ${b.earned ? 'got' : 'miss'}` }, h('i', {}, b.earned ? '★' : ''), b.def.label)),
       ];
-      if (unlocked.sandbox) content.push(h('p', {}, '🧪 Sandbox unlocked! Every part there is, as many as you want.'));
+      if (unlocked.sandbox) content.push(h('p', {}, 'Sandbox unlocked! Every part there is, as many as you want.'));
       if (unlocked.projects.length) content.push(h('p', {}, `New: ${unlocked.projects.map((id) => PROJECT_MAP[id].title).join(', ')}`));
       content.push(h('p', { class: 'muted' }, wagon ? 'Build something. Test it. Use it. Now… what else needs building?' : 'Wait. What ELSE can I build?'));
       const row = h('div', { class: 'row' });
       if (nextId) row.append(btn(`▶ ${PROJECT_MAP[nextId].title}`, () => this.startProject(nextId), 'go'));
-      if (this.save.sandbox) row.append(btn('🧪 Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
+      if (this.save.sandbox) row.append(btn('Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
       row.append(btn('Keep tinkering', () => this.modal.hide()));
       content.push(row);
       this.modal.show(content, 'brief');
@@ -2361,7 +2362,7 @@ export class Game {
     if (this.mode === 'title' || this.mode === 'intro' || this.mode === 'build') return;
     if (this.mode === 'replay') return;
     const proj = this.projectId ? PROJECT_MAP[this.projectId] : null;
-    const title = this.sandbox ? '🧪 SANDBOX' : proj?.title ?? '';
+    const title = this.sandbox ? 'SANDBOX' : proj?.title ?? '';
     const sub = this.sandbox ? 'No rules. Every part.' : this.succeeded ? 'Solved! ★' : `tap for the goal · ${fmtTime(this.sim.projectTime)}`;
     const html = `${title}<small>${sub}</small>`;
     if (this.projectChip.innerHTML !== html) this.projectChip.innerHTML = html;
@@ -2372,7 +2373,7 @@ export class Game {
     if (pw) {
       const pct = Math.round(pw.charge * 100);
       const low = pw.factor < 0.6 || pct < 10;
-      const html = `⚡ ${pct}%${pw.factor < 0.99 ? ` <small>only ${Math.round(pw.factor * 100)}% power!</small>` : '<small>battery</small>'}<div class="meter ${low ? 'low' : ''}"><div style="width:${pct}%"></div></div>`;
+      const html = `${pct}%${pw.factor < 0.99 ? ` <small>only ${Math.round(pw.factor * 100)}% power!</small>` : '<small>battery</small>'}<div class="meter ${low ? 'low' : ''}"><div style="width:${pct}%"></div></div>`;
       // Only touch the DOM when the reading changes (it used to re-parse every frame).
       if (html !== this.powerHtml) this.powerChip.innerHTML = this.powerHtml = html;
     }
@@ -2387,7 +2388,7 @@ export class Game {
       this.hintTimer += this.frameDt;
       if (this.hintTimer > 120 && !this.idleNudged && !this.sim.machines.size && !this.succeeded && !(this.save.hintsSeen[this.projectId] ?? 0)) {
         this.idleNudged = true;
-        this.thought.say('Stuck? The 💡 up top has hints, if I want them.', 4500);
+        this.thought.say('Stuck? The bulb up top has hints, if I want them.', 4500);
       }
     }
     this.hintBtn.classList.toggle('hidden', !this.projectId || this.sandbox);
