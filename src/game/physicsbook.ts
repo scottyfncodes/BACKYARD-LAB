@@ -148,9 +148,9 @@ function forcesExperiment(): Experiment {
   const push = slider('Push', 0, 120, 5, 40, (n) => `${n} N`, () => update());
   const mass = slider('How heavy', 1, 20, 1, 5, (m) => `${m} kg`, () => update());
   const surfaces: [string, number][] = [
-    ['🧊 ice', 0.05],
-    ['🌱 grass', 0.6],
-    ['🧶 carpet', 0.9],
+    ['ice', 0.05],
+    ['grass', 0.6],
+    ['carpet', 0.9],
   ];
   const surfaceRow = h('div', { class: 'book-choices' });
   const renderSurfaces = () => {
@@ -408,7 +408,7 @@ export class PhysicsBook {
             'book-row',
           )
         : btn(
-            `<span class="book-ch"><b>${c.n}. ${c.title}</b><small>Pages stuck together. ${c.unlock.withBook ? '' : c.unlock.tease}</small></span><span class="book-tick">📎</span>`,
+            `<span class="book-ch"><b>${c.n}. ${c.title}</b><small>Pages stuck together. ${c.unlock.withBook ? '' : c.unlock.tease}</small></span><span class="book-tick"></span>`,
             () => {
               this.host.play('error');
               const row = this.host.modal.el.querySelector(`[data-stuck="${c.id}"]`);
@@ -428,7 +428,7 @@ export class PhysicsBook {
         h('div', { class: 'book-toc' }, ...rows),
         h('div', { class: 'label' }, 'FURTHER IN · pages stuck together, for now'),
         h('div', { class: 'book-toc later' }, ...later),
-        h('p', { class: 'book-note' }, '“Don’t read it cover to cover. Open it when something doesn’t work and you want to know why.” — Mom, on a sticky note inside the cover'),
+        h('p', { class: 'book-note' }, '“Don’t read it cover to cover. Open it when something doesn’t work and you want to know why.” (Mom, on a sticky note inside the cover)'),
         h('div', { class: 'row' }, btn('Put it back', () => this.close(onClose), 'go')),
       ],
       'book',
@@ -458,16 +458,16 @@ export class PhysicsBook {
         h('div', { class: 'book-head' }, h('span', { class: 'muted' }, `PHYSICS 101 · CHAPTER ${c.n}`), btn('✕', () => this.close(onClose), 'small round close')),
         h('h2', { class: 'book-h' }, c.title),
         h('p', { class: 'book-idea' }, c.idea),
-        h('div', { class: 'label' }, '✏️ TRY IT: CHANGE SOMETHING AND WATCH'),
+        h('div', { class: 'label' }, 'TRY IT: CHANGE SOMETHING AND WATCH'),
         h('div', { class: 'book-lab' }, exp.el),
-        h('div', { class: 'book-words' }, ...c.words.map((w) => h('div', {}, h('b', {}, w.term), ' — ', w.plain))),
+        h('div', { class: 'book-words' }, ...c.words.map((w) => h('div', {}, h('b', {}, w.term), ': ', w.plain))),
         h('div', { class: 'book-margin' }, c.momsNote),
-        h('p', { class: 'book-try' }, `🔧 ${c.tryIt}`),
+        h('p', { class: 'book-try' }, c.tryIt),
         math,
         h(
           'div',
           { class: 'row' },
-          btn('📖 Contents', () => this.showContents(onClose), 'small'),
+          btn('Contents', () => this.showContents(onClose), 'small'),
           prev && this.unstuck(prev) ? btn(`◀ ${prev.title}`, () => this.showChapter(prev, onClose), 'small') : null,
           next && this.unstuck(next) ? btn(`${next.title} ▶`, () => this.showChapter(next, onClose), 'small') : null,
           btn('Back to it', () => this.close(onClose), 'go'),

@@ -84,8 +84,8 @@ describe('the first-build coach follows the real game, step by step', () => {
   });
 
   it('names the button that is actually on screen: BUILD right by the bench, BENCH anywhere else', () => {
-    expect(coachStep(fresh({ nearBench: true }))!.tip).toMatch(/🔧 BUILD/);
-    expect(coachStep(fresh({ nearBench: false }))!.tip).toMatch(/🔧 BENCH/);
+    expect(coachStep(fresh({ nearBench: true }))!.tip).toMatch(/Tap BUILD\./);
+    expect(coachStep(fresh({ nearBench: false }))!.tip).toMatch(/Tap BENCH\./);
     expect(coachStep(fresh({ nearBench: true, touch: false }))!.tip).toMatch(/Press E/);
   });
 

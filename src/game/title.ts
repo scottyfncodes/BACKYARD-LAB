@@ -19,7 +19,7 @@ export interface TitleAction {
 export function titleAction(s: SaveData): TitleAction {
   const sess = s.session;
   if (sess) {
-    const sub = sess.mode === 'sandbox' ? '🧪 Sandbox' : (PROJECT_MAP[sess.project ?? '']?.title ?? '');
+    const sub = sess.mode === 'sandbox' ? 'Sandbox' : (PROJECT_MAP[sess.project ?? '']?.title ?? '');
     return { verb: 'Keep building', sub, resume: true, project: sess.project };
   }
   const next = PROJECTS.find((p) => s.unlocked.includes(p.id) && !s.completed[p.id]) ?? PROJECTS[0];

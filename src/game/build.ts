@@ -25,6 +25,7 @@ import type { Renderer } from '../render/renderer';
 import { partThumb } from '../render/thumbs';
 import { BlueprintView } from '../render/views';
 import { btn, buzz, h, type Thought, type Toasts } from '../ui/dom';
+import { icon } from '../ui/icons';
 import type { CameraDirector } from './camera';
 import { generateStuds, rankInDirection, type Stud } from './studs';
 import type { Idea } from '../data/ideas';
@@ -330,20 +331,20 @@ export class BuildMode {
       return;
     }
     const v = p.verdict;
-    const icon = !v ? '👀' : v.mood === 'rolled' ? '✅' : '🤔';
+    const mark = !v ? icon('eye') : v.mood === 'rolled' ? icon('check') : '?';
     const kids: HTMLElement[] = [
       h('div', { class: 'push-head' }, h('span', { class: 'push-tag' }, 'EXPERIMENT'), h('span', {}, v ? 'What happened' : 'Watching it roll…')),
-      v ? h('p', { class: `push-line ${v.mood}` }, h('i', {}, icon), v.line) : h('p', { class: 'push-line watching' }, h('i', {}, icon), 'Does it roll? Does it tip? Watch.'),
+      v ? h('p', { class: `push-line ${v.mood}` }, h('i', { html: mark }), v.line) : h('p', { class: 'push-line watching' }, h('i', { html: mark }), 'Does it roll? Does it tip? Watch.'),
     ];
     if (v) kids.push(h('div', { class: 'push-facts' }, ...v.facts.map((f) => h('span', {}, f))));
-    if (v?.next) kids.push(h('p', { class: 'push-next' }, `💭 ${v.next}`));
+    if (v?.next) kids.push(h('p', { class: 'push-next' }, v.next));
     if (v) {
       kids.push(
         h(
           'div',
           { class: 'row' },
           act(btn('↺ RESET', () => this.stopTest(), 'small primary'), 'pushreset'),
-          btn('👉 Push again', () => {
+          btn('Push again', () => {
             this.stopTest();
             this.push();
           }, 'small'),
@@ -378,7 +379,7 @@ export class BuildMode {
       this.notesKey = key;
       const allDone = notes.every((n) => n.done);
       this.notesEl.replaceChildren(
-        h('div', { class: 'wn-head' }, allDone ? '🛒 THAT’S A WAGON' : '🛒 IS IT A WAGON YET?'),
+        h('div', { class: 'wn-head' }, allDone ? 'THAT’S A WAGON' : 'IS IT A WAGON YET?'),
         ...notes.map((n) => h('div', { class: `wn ${n.done ? 'done' : ''}` }, h('i', {}, n.done ? '✓' : ''), n.text)),
         ...(allDone ? [h('div', { class: 'wn ok' }, h('i', {}, '→'), `Tap ${this.host.goLabel} to see if it rolls.`)] : []),
       );
@@ -398,13 +399,13 @@ export class BuildMode {
       b.push(btn('■ STOP TEST', () => this.stopTest(), 'danger'));
     } else {
       if (this.host.sandbox) {
-        b.push(btn('💾', () => this.saveCreation(), 'small'));
-        b.push(btn('📂', () => this.loadMenu(), 'small'));
+        b.push(btn('Save', () => this.saveCreation(), 'small'));
+        b.push(btn('Load', () => this.loadMenu(), 'small'));
       }
       const hints = this.host.onHints;
-      if (hints && !this.guide) b.push(btn('💡', () => hints(), 'small hint-btn'));
+      if (hints && !this.guide) b.push(btn(icon('bulb'), () => hints(), 'small hint-btn'));
       const book = this.host.onBook;
-      if (book) b.push(btn('📖', () => book(), 'small book-btn'));
+      if (book) b.push(btn(icon('book'), () => book(), 'small book-btn'));
       b.push(btn('✕', () => this.leave(), 'small'));
     }
     this.topBtns.replaceChildren(...b);
@@ -418,8 +419,8 @@ export class BuildMode {
     if (!show) return;
     // MISSION 0: the first experiment is a real shove across the garage floor; placing it yourself would just roll it out.
     const b: HTMLElement[] = this.host.onPush
-      ? [act(btn('👉 PUSH TEST', () => this.push(), 'blue test-btn'), 'push'), act(btn(this.host.goLabel, () => this.testOut(), 'go test-btn'), 'go')]
-      : [btn('⚙ Try it here', () => this.test(), 'small'), btn('📍 Place it myself', () => this.done(), 'small'), act(btn(this.host.goLabel, () => this.testOut(), 'go test-btn'), 'go')];
+      ? [act(btn('PUSH TEST', () => this.push(), 'blue test-btn'), 'push'), act(btn(this.host.goLabel, () => this.testOut(), 'go test-btn'), 'go')]
+      : [btn('Try it here', () => this.test(), 'small'), btn('Place it myself', () => this.done(), 'small'), act(btn(this.host.goLabel, () => this.testOut(), 'go test-btn'), 'go')];
     this.goBox.replaceChildren(...b);
   }
 
@@ -485,7 +486,7 @@ export class BuildMode {
       const sk = def.sockets.find((x) => x.id === this.holding!.socket) ?? def.sockets[0];
       bar.push(btn(`⇅ ${sk.label}`, () => this.cycleSocket(), 'small'));
     }
-    if (!def.link) bar.push(btn(this.fineTune ? '✓ Auto fit' : '🎯 Fine tune', () => this.toggleFineTune(), 'small'));
+    if (!def.link) bar.push(btn(this.fineTune ? '✓ Auto fit' : 'Fine tune', () => this.toggleFineTune(), 'small'));
     bar.push(btn(moving ? '✕ Undo move' : '✕ Put back', () => this.clearHolding(), 'small'));
     this.placeBar.replaceChildren(...bar);
   }
@@ -508,7 +509,7 @@ export class BuildMode {
     if (timer && timer.type === 'timer') {
       const cur = part.settings?.delay ?? timer.delay;
       const next = timer.options[(timer.options.indexOf(cur) + 1) % timer.options.length];
-      row.append(btn(`⏱ ${cur}s`, () => this.setting(part.uid, { delay: next }), 'small'));
+      row.append(btn(`Timer ${cur}s`, () => this.setting(part.uid, { delay: next }), 'small'));
     }
     if (def.link?.kind === 'rope') {
       const l = this.bp.links.find((x) => x.part === part.uid);
@@ -517,10 +518,10 @@ export class BuildMode {
       const opts = (def.link.lengthOptions ?? [def.link.length]).filter((o) => o >= span - 1e-6);
       const cur = part.settings?.length ?? def.link.length;
       const next = opts[(opts.indexOf(cur) + 1) % opts.length] ?? cur;
-      row.append(btn(`📏 ${cur} m`, () => this.setting(part.uid, { length: next }), 'small'));
+      row.append(btn(`Length ${cur} m`, () => this.setting(part.uid, { length: next }), 'small'));
     }
     if (!def.link) row.append(btn('✥ Move', () => this.startMove(part.uid), 'small blue'));
-    row.append(btn('🗑 Remove', () => this.remove(part.uid), 'small danger'));
+    row.append(btn('Remove', () => this.remove(part.uid), 'small danger'));
     this.panel.replaceChildren(
       h('h3', {}, def.name),
       h('div', {}, ...def.traits.map((t) => h('span', { class: 'trait' }, t))),
@@ -1180,7 +1181,7 @@ export class BuildMode {
     } else if (pl.conn) {
       const target = getPart(findPart(this.bp, pl.conn.target)!.def).name.toLowerCase();
       const how = { weld: 'Stick it to', axle: 'Spins freely on', hinge: 'Swings on', driven: 'Driven by', tether: 'Tie it to' }[pl.conn.kind];
-      const tag = { weld: '🔩 sticks to', axle: '⟳ spins on', hinge: '↻ swings on', driven: '⚙ driven by', tether: '🎈 tied to' }[pl.conn.kind];
+      const tag = { weld: 'sticks to', axle: 'spins on', hinge: 'swings on', driven: 'driven by', tether: 'tied to' }[pl.conn.kind];
       const tilt = this.holding.tilt;
       const note = tilt && pl.conn.kind !== 'weld' ? ' (stays square on it)' : tilt ? ` · tilted ${tilt}°` : '';
       const lifts = (pl as Placement & { lifts?: boolean }).lifts ? ' (lifts the machine up)' : '';
@@ -1214,7 +1215,7 @@ export class BuildMode {
     this.linkLine.position.copy(a).add(b).multiplyScalar(0.5).add(this.host.benchOrigin);
     this.linkLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
     this.linkLine.scale.set(1, Math.max(0.01, len), 1);
-    this.setStatus(ok ? `${len.toFixed(2)} m — ✔ to tie it` : len > def.link!.maxSpan ? 'Too far apart' : 'Pick something else', ok ? 'good' : 'bad');
+    this.setStatus(ok ? `${len.toFixed(2)} m: ✔ to tie it` : len > def.link!.maxSpan ? 'Too far apart' : 'Pick something else', ok ? 'good' : 'bad');
     this.cursorTag.textContent = ok ? `${len.toFixed(1)} m` : 'too far';
   }
 
@@ -1690,7 +1691,7 @@ export class BuildMode {
   private loadMenu() {
     const list = this.host.creations();
     if (!list.length) {
-      this.host.toasts.show('No saved machines yet. Build one and tap 💾', '');
+      this.host.toasts.show('No saved machines yet. Build one and tap Save', '');
       return;
     }
     const wrap = h('div', { class: 'build-panel', style: 'max-height:50vh;overflow:auto' });
@@ -1808,10 +1809,10 @@ export class BuildMode {
     const have = this.host.stash.infinite || this.host.stash.count(step.part) > 0;
     const def = getPart(step.part);
     this.guideEl.replaceChildren(
-      h('div', { class: 'guide-head' }, `💡 ${g.idea.title} · step ${g.step + 1} of ${g.idea.steps.length}`),
+      h('div', { class: 'guide-head' }, `${g.idea.title} · step ${g.step + 1} of ${g.idea.steps.length}`),
       h('div', { class: 'guide-say' }, step.say),
       have
-        ? h('div', { class: 'guide-part' }, !this.holding ? `Tap the ${def.name} in the tray below 👇` : this.isGuideSpot(this.aim) ? 'It is on the gold ring. Tap ✔ PLACE ✨' : 'Drag it back to the gold ring ✨')
+        ? h('div', { class: 'guide-part' }, !this.holding ? `Tap the ${def.name} in the tray below.` : this.isGuideSpot(this.aim) ? 'It is on the gold ring. Tap ✔ PLACE.' : 'Drag it back to the gold ring.')
         : h('div', { class: 'guide-part missing' }, `No ${def.name} left in the parts bin. Is one stuck on a machine out in the yard?`),
       btn('Stop guide', () => {
         this.guide = null;
@@ -1851,7 +1852,7 @@ export class BuildMode {
     };
     wrap.append(
       h('div', { class: 'muted' }, 'One way to do it. Yours can be totally different!'),
-      h('h2', {}, `💡 ${idea.title}`),
+      h('h2', {}, idea.title),
       h('p', {}, idea.pitch),
       h('div', { class: 'idea-list' }, ...rows),
       h(
