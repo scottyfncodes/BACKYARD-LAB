@@ -1292,6 +1292,7 @@ export class BuildMode {
     const joint = !!pl.conn && pl.conn.kind !== 'weld' && pl.conn.kind !== 'tether';
     this.host.audio.play(joint ? 'ratchet' : 'attach');
     buzz(joint ? 25 : 15);
+    this.host.cam.shake(joint ? 0.45 : 0.35);
     const at = pl.conn ? pl.conn.anchor.clone() : new THREE.Vector3(pl.pose.p.x, 0, pl.pose.p.z);
     const n = pl.conn && pl.conn.kind !== 'tether' ? pl.pose.p.clone().sub(pl.conn.anchor).normalize() : new THREE.Vector3(0, 1, 0);
     const mat = new THREE.MeshBasicMaterial({ color: joint ? 0x6cc8ff : 0xfff1a8, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide });
@@ -1316,12 +1317,13 @@ export class BuildMode {
     this.clearHolding();
   }
 
+  /** Squash and stretch as it lands; wheels wobble on their new axle before they settle. */
   private popUid(uid: number, amount = 1.25) {
     const g = this.view.parts.get(uid);
-    if (g) {
-      g.scale.setScalar(amount);
-      g.userData.popT = 0.18 * (amount - 1) * 4;
-    }
+    if (!g) return;
+    const id = this.bp.parts.find((p) => p.uid === uid)?.def;
+    const wobble = !!id && getPart(id).sockets.some((s) => s.joint === 'axle');
+    g.userData.pop = { t: 0, amp: (amount - 1) * 1.6, baseQ: g.quaternion.clone(), wobble };
   }
 
   private afterChange() {
@@ -1890,9 +1892,20 @@ export class BuildMode {
       return false;
     });
     for (const g of this.view.parts.values()) {
-      if (g.userData.popT > 0) {
-        g.userData.popT -= dt;
-        g.scale.setScalar(1 + Math.max(0, g.userData.popT) * 1.4);
+      const pop = g.userData.pop as { t: number; amp: number; baseQ: THREE.Quaternion; wobble: boolean } | undefined;
+      if (!pop) continue;
+      pop.t += dt;
+      // A damped spring: squashes flat on impact, overshoots tall, settles.
+      const s = pop.amp * Math.exp(-pop.t * 9) * Math.cos(pop.t * 26);
+      g.scale.set(1 + s * 0.5, 1 - s, 1 + s * 0.5);
+      if (pop.wobble) {
+        const w = Math.exp(-pop.t * 4.5) * Math.sin(pop.t * 22) * 0.22;
+        g.quaternion.copy(pop.baseQ).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(w, w * 0.6, 0)));
+      }
+      if (pop.t > 1) {
+        g.scale.setScalar(1);
+        g.quaternion.copy(pop.baseQ);
+        delete g.userData.pop;
       }
     }
   }

@@ -20,8 +20,14 @@ import { Trail } from '../render/trail';
 import { coachStep, type CoachSnapshot, type CoachView } from './coach';
 import { pushPlan, PushProbe, pushVerdict, shove, type PushVerdict } from './pushtest';
 import { partThumb } from '../render/thumbs';
-import { ActionBar, btn, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
+import { ActionBar, btn, buzz, h, Modal, Thought, Toasts, type ActionDef } from '../ui/dom';
 import { icon } from '../ui/icons';
+import { Cinema } from '../ui/cinema';
+import { Dog, type Mover } from '../render/dog';
+import { Mom } from '../render/mom';
+import { KID_LINES, LinePicker, MOM_LINES, type KidCue, type MomCue } from '../data/banter';
+import { canRecordClips, ClipRecorder, shareClip } from './clip';
+import { ballSpot, cartPlacement, COLD_OPEN, flingBall, rocketCart } from './coldopen';
 import { BuildMode, type Stash } from './build';
 import { CameraDirector } from './camera';
 import { autoSpot, machineFits, type Area } from './autospot';
@@ -29,14 +35,44 @@ import { analyze, TestProbe, type TestReport } from './diagnostics';
 import { Input } from './input';
 import { RunJournal } from './journal';
 import { PhysicsBook } from './physicsbook';
-import { Replay } from './replay';
+import { highlightSpeed, Replay, type Highlight } from './replay';
 import { sandboxLock, titleAction, titleContraption } from './title';
 import { completeProject, discover, findBook, keepWagon, loadSave, revealChapter, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
 
 /** Title-screen framing: the half-built wagon by the junk pile, the broom it still needs, and where the camera drifts. */
 const TITLE_SHOT = { at: [-5.3, 1.8, 2.1] as const, broom: [-4.7, 2.5, 1.2] as const, look: [-5.45, 0.3, 2.0] as const, yaw: 0.75 };
 
-type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
+type Mode = 'title' | 'coldopen' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
+
+/** An instant replay in progress. */
+interface HighlightPlay {
+  h: Highlight;
+  stamp: string;
+  title: string;
+  sub: string;
+  /** Back to the game (shows whatever comes next: the success card, the test results…). */
+  then: () => void;
+  look: THREE.Vector3;
+  yaw: number;
+  dist: number;
+  /** Seconds since the replay ran out (the freeze frame with the stamp). */
+  freeze: number;
+  recording: boolean;
+}
+
+/** The cold open in progress. */
+interface ColdOpen {
+  t: number;
+  crashT: number | null;
+  cart: MachineInstance;
+  ball: Item;
+  ignited: boolean;
+  cues: Set<string>;
+  look: THREE.Vector3;
+  pos: THREE.Vector3;
+  /** Start Mission 0 afterwards (first time), or go back to the title (watching it again). */
+  thenPlay: boolean;
+}
 
 const BENCH_ORIGIN = new THREE.Vector3(WORLD.workbench.pos[0], WORLD.workbench.top, WORLD.workbench.pos[2]);
 /** How close the kid has to be to use the wagon (horizontal, body centre to wagon centre). */
@@ -102,6 +138,27 @@ export class Game {
   /** Mom's PHYSICS 101. */
   private book!: PhysicsBook;
   private bookBtn!: HTMLElement;
+  /** Biscuit, and Mom at the kitchen window. */
+  dog: Dog;
+  mom: Mom;
+  private kidLines = new LinePicker(KID_LINES);
+  private momLines = new LinePicker(MOM_LINES);
+  private lastKid = -99;
+  private lastMom = -99;
+  private momSaid = new Set<MomCue>();
+  /** Things said once per run ("look at it GO"). */
+  private runSaid = new Set<KidCue>();
+  /** Replay clock when the current/last run started, and how many runs so far. */
+  private runStartT = 0;
+  private runCount = 0;
+  private lastReport: TestReport | null = null;
+  private hl: HighlightPlay | null = null;
+  private co: ColdOpen | null = null;
+  private cinema!: Cinema;
+  private clip = new ClipRecorder();
+  private zoomCd = new Map<string, number>();
+  private successAt = 0;
+  private successFrom = 0;
 
   // ---- MISSION 0: the first experiment, and the coach that walks through it
   /** The push test on the garage floor: its probe while it runs. */
@@ -159,6 +216,13 @@ export class Game {
     this.fx = new Effects(this.r.scene);
     this.beacon = new Beacon(this.r.scene);
     this.trail = new Trail(this.r.scene);
+    this.r.renderer.localClippingEnabled = true;
+    this.dog = new Dog(this.r.scene);
+    this.dog.onBark = (at) => {
+      this.audio.play('bark', at);
+      if (this.running && this.mode === 'explore') this.kid('dogBark', 0.12);
+    };
+    this.mom = new Mom(this.r.scene);
     this.cam = new CameraDirector(this.r.camera);
     this.input = new Input(canvas);
     this.input.sensitivity = this.save.settings.sensitivity;
@@ -178,6 +242,7 @@ export class Game {
       play: (snd) => this.audio.play(snd as Parameters<Audio['play']>[0]),
     });
     this.buildHud();
+    this.cinema = new Cinema(ui);
     this.build = new BuildMode(this.buildHost());
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 200));
@@ -229,7 +294,14 @@ export class Game {
     this.trail?.clear();
     this.succeeded = false;
     this.replay = new Replay();
+    this.replay.start();
+    this.runCount = 0;
+    this.runSaid.clear();
     this.absorbedOnce.clear();
+    // Biscuit trots along wherever the kid is. In BISCUIT'S BALL he won't leave the shed alone.
+    const sp = WORLD.playerSpawn.pos;
+    this.dog.place(new THREE.Vector3(sp[0] + 1.6, 0, sp[2] + 1.8), Math.PI);
+    this.dog.home = project?.id === 'dog_ball' && started ? new THREE.Vector3(-10, 0, 8.3) : null;
   }
 
   private buildHost() {
@@ -362,7 +434,8 @@ export class Game {
     this.updateTitle(0);
     const s = this.save;
     const act = titleAction(s);
-    this.titleGo = () => (act.resume ? this.resume() : this.startProject(act.project!));
+    // A brand-new kid gets the cold open first: the rocket cart, already on the lawn.
+    this.titleGo = () => (act.resume ? this.resume() : s.seenOpening ? this.startProject(act.project!) : this.playColdOpen(true));
     const go = btn(`${act.verb}<small>${act.sub}</small>`, () => this.titleGo?.(), 'go title-go');
     const lock = sandboxLock(s);
     const dockBtn = (glyph: string, label: string, onPress: () => void, cls = '') => {
@@ -492,6 +565,7 @@ export class Game {
       h('div', { class: 'setting' }, 'Thoughts & hints', hints),
       ...(this.mode === 'title' || this.wagonMission() ? [h('div', { class: 'setting' }, 'First-build tutorial', tutorial)] : []),
       h('div', { class: 'setting' }, 'Look speed', sens),
+      ...(this.mode === 'title' ? [h('div', { class: 'setting' }, 'The opening', btn('Watch it', () => this.playColdOpen(false), 'small'))] : []),
       h(
         'p',
         { class: 'muted' },
@@ -851,6 +925,7 @@ export class Game {
     if (findBook(this.save)) {
       this.toasts.show('Found: <b>PHYSICS 101</b>. Mom’s old textbook.', 'new', 3200);
       this.audio.play('discover');
+      setTimeout(() => this.momSay('book', true), 1400);
       this.persist();
     }
     // Coming from a test result counts as meeting the idea: those pages come unstuck now.
@@ -868,7 +943,8 @@ export class Game {
     if (!fresh.length) return;
     this.persistSoon();
     if (!announce || !this.save.book.found) return;
-    this.toasts.show(`Pages came unstuck: <b>${fresh.map((id) => CHAPTER_MAP[id].title).join(', ')}</b>`, 'new', 3200);
+    const note = CHAPTER_MAP[fresh[0]].momsNote;
+    this.toasts.show(`Pages came unstuck: <b>${fresh.map((id) => CHAPTER_MAP[id].title).join(', ')}</b><br><span class="hand">Mom wrote: “${note}”</span>`, 'new note', 5200);
   }
 
   // ================================================================== MISSION 0: the wagon
@@ -1249,6 +1325,8 @@ export class Game {
       a.push({ id: 'pickm', label: `PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
     } else if (look?.kind === 'static' && look.id === 'physics_book') {
       a.push({ id: 'read', label: `READ${k('E')}`, cls: 'primary', onPress: () => this.openBook() });
+    } else if (this.dog.near(this.sim.eye(), 1.9) && this.dog.state !== 'chase') {
+      a.push({ id: 'pet', label: `PET BISCUIT${k('E')}`, cls: 'primary', onPress: () => this.petDog() });
     } else if (this.nearBench()) {
       a.push({ id: 'build', label: `BUILD${k('E')}`, cls: 'primary', onPress: () => this.enterBuild() });
     } else if (this.nearGateFromOutside()) {
@@ -1283,7 +1361,7 @@ export class Game {
       a.push({ id: 'tweak', label: `BUILD${k('T')}`, onPress: () => this.tweakMachine() });
       a.push({ id: 'turn', label: `↻ TURN${k('Y')}`, onPress: () => this.turnMachine() });
     }
-    if (!this.running && this.replay.available && this.mode === 'explore') a.push({ id: 'replay', label: `⏺ REPLAY${k('V')}`, onPress: () => this.startReplay() });
+    if (!this.running && this.runCount > 0 && this.replay.available && this.mode === 'explore') a.push({ id: 'replay', label: `⏺ REPLAY${k('V')}`, onPress: () => this.startReplay() });
     return a;
   }
 
@@ -1765,9 +1843,12 @@ export class Game {
     this.ribbonText.textContent = 'TESTING';
     this.verdictShown = false;
     this.journal.begin(this.sim);
-    this.replay.start();
+    this.runStartT = this.replay.t;
+    this.runCount++;
+    this.runSaid.clear();
     this.audio.play('go');
     this.thought.hide();
+    setTimeout(() => this.running && this.kid('go', 0.45), 400);
     this.driving = true;
     this.input.unlockPointer();
     // Watch it work: pull back behind the kid's shoulder and orbit the action.
@@ -1803,7 +1884,6 @@ export class Game {
     this.running = false;
     document.body.classList.remove('running');
     this.verdictShown = true;
-    this.replay.stop();
     this.cam.set('eyes', false, 0.8);
     if (report) this.showResults(report);
   }
@@ -1829,6 +1909,7 @@ export class Game {
    */
   private showResults(r: TestReport) {
     if (this.sandbox && r.mood === 'learned' && r.observation === 'Interesting result!') return;
+    this.lastReport = r;
     this.audio.play('hmm');
     const seg = (v: number | null) => {
       const n = v === null ? 0 : Math.round(v * 10);
@@ -1863,6 +1944,7 @@ export class Game {
         canTweak ? btn('↺ Retry', () => this.retry(), 'small') : null,
         r.fix === 'turn' && canTweak ? btn(`↻ Turn it toward the ${this.projectId ? PROJECT_MAP[this.projectId].target : 'target'}`, () => this.turnMachine(true), 'small primary') : null,
         canTweak ? btn('Back to build', () => this.tweakMachine(), r.fix ? 'small' : 'small primary') : null,
+        this.replay.t - this.runStartT > 0.8 ? btn('Replay', () => this.startReplay(), 'small') : null,
         bookBtn,
       ),
     );
@@ -1919,27 +2001,206 @@ export class Game {
     return best?.v ?? null;
   }
 
+  /** ⏺ REPLAY: the last run again, as an instant replay. */
   private startReplay() {
+    const to = this.replay.t;
+    const from = Math.max(this.runStartT, to - 12, this.replay.first);
+    const hl = this.replay.highlight(from, to);
+    if (!hl) {
+      this.toasts.show('Nothing moved enough to replay. Try a test first!', '', 2200);
+      return;
+    }
+    const report = this.lastReport;
+    const hadResults = !this.resultsEl.classList.contains('hidden');
     if (this.running) this.resetRun();
-    if (!this.replay.play(1)) return;
-    this.mode = 'replay';
-    this.input.unlockPointer();
-    const s = this.subject() ?? this.sim.eye();
-    this.cam.orbit.center.copy(s);
-    this.cam.orbit.dist = 6;
-    this.cam.orbit.pitch = 0.45;
-    this.cam.set('free');
-    this.actions.set([
-      { id: 'stopreplay', label: '■ STOP', cls: 'danger', onPress: () => this.stopReplay() },
-      { id: 'slow', label: 'SLOW-MO', onPress: () => (this.replay.speed = this.replay.speed === 1 ? 0.3 : 1) },
-    ]);
-    this.leftActions.set([]);
+    this.hideResults();
+    const m = [...this.sim.machines.values()].find((x) => x.id !== this.testMachine);
+    this.playHighlight(hl, {
+      stamp: `TAKE ${Math.max(1, this.runCount)}`,
+      title: this.sandbox ? 'SANDBOX' : this.projectId ? PROJECT_MAP[this.projectId].title : '',
+      sub: m ? m.bp.name : '',
+      then: () => {
+        if (hadResults && report) this.showResults(report);
+      },
+    });
   }
 
-  private stopReplay() {
+  // ================================================================== instant replays
+
+  /** Run a highlight: a director's camera on the action, slow motion at the big moment, a stamp at the end. */
+  private playHighlight(h: Highlight, o: { stamp: string; title: string; sub: string; then: () => void; recording?: boolean }) {
+    if (!this.replay.play(1, h.from, h.to)) {
+      o.then();
+      return;
+    }
+    this.mode = 'replay';
+    this.modal.hide();
+    this.setHudVisible(false);
+    this.thought.hide();
+    this.input.unlockPointer();
+    this.dog.paused = true;
+    // Frame it from a side the action can actually be seen from (not through a fence), near where the kid was watching.
+    const a = this.replay.posAt(h.key, h.from) ?? this.sim.eye();
+    const p = this.replay.posAt(h.key, h.peak) ?? a;
+    const b = this.replay.posAt(h.key, h.to) ?? p;
+    const spread = Math.max(a.distanceTo(p), p.distanceTo(b), a.distanceTo(b));
+    const dist = THREE.MathUtils.clamp(spread * 0.55 + 3.4, 3.6, 9);
+    const eye = this.sim.eye();
+    const fromKid = Math.atan2(eye.x - p.x, eye.z - p.z);
+    let yaw = fromKid + 0.7;
+    let best = -Infinity;
+    for (let i = 0; i < 16; i++) {
+      const y = fromKid + (i / 16) * Math.PI * 2;
+      let score = Math.cos(y - fromKid - 0.6);
+      for (const at of [a, p, b]) if (!this.clearShot(at, y, dist)) score -= 3;
+      if (score > best) {
+        best = score;
+        yaw = y;
+      }
+    }
+    this.hl = { h, stamp: o.stamp, title: o.title, sub: o.sub, then: o.then, look: a.clone(), yaw, dist, freeze: 0, recording: !!o.recording };
+    this.cam.set('intro', true);
+    this.cinema.show(true);
+    this.cinema.setTag(o.recording ? '● REC' : '● INSTANT REPLAY');
+    this.cinema.bottom(o.title, o.sub);
+    this.cinema.skip(o.recording ? null : () => this.endHighlight());
+    this.updateHighlight(0);
+  }
+
+  private updateHighlight(dt: number) {
+    const hl = this.hl;
+    if (!hl) return;
+    if (this.replay.playing) {
+      this.replay.speed = highlightSpeed(this.replay.playT, hl.h.peak);
+      const due = this.replay.update(this.view, dt) ?? [];
+      // Hear it again: every clunk and boing, right on cue.
+      for (const e of due) this.eventFx(e);
+      this.cinema.slowmo(this.replay.speed < 0.6);
+    } else {
+      if (hl.freeze === 0) {
+        this.cinema.slowmo(false);
+        this.cinema.stamp(hl.stamp);
+        this.audio.play('stamp');
+        this.cam.shake(0.4);
+      }
+      hl.freeze += Math.max(dt, 1e-4);
+      if (hl.freeze > 1.6 && hl.freeze - dt <= 1.6) this.highlightDone();
+    }
+    // The camera: follow what matters, slowly circling it.
+    const f = this.replay.posAt(hl.h.key, this.replay.playT);
+    if (f) hl.look.lerp(f, dt === 0 ? 1 : 1 - Math.exp(-dt * 4));
+    // A slow drift around the chosen side, never all the way round.
+    const u = hl.h.to > hl.h.from ? (this.replay.playT - hl.h.from) / (hl.h.to - hl.h.from) : 1;
+    const yaw = hl.yaw + (u - 0.5) * 0.5;
+    let cam = hl.look.clone().add(this.orbitOffset(yaw, hl.dist));
+    cam.y = Math.max(cam.y, 0.4);
+    const d = cam.clone().sub(hl.look);
+    const len = d.length();
+    const hit = this.sim.physics.raycast(hl.look, d.divideScalar(len), len, groups(0xffff, GROUP.STATIC));
+    if (hit) cam = hl.look.clone().addScaledVector(d, Math.max(0.6, hit.dist - 0.25));
+    this.cam.intro.p.copy(cam);
+    this.cam.intro.look.copy(hl.look);
+  }
+
+  private orbitOffset(yaw: number, dist: number, pitch = 0.38) {
+    return new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
+  }
+
+  /** Can a camera at this angle see the point without a wall or fence in the way? */
+  private clearShot(at: THREE.Vector3, yaw: number, dist: number) {
+    const look = at.clone().setY(Math.max(at.y, 0.3));
+    const d = this.orbitOffset(yaw, dist);
+    const len = d.length();
+    return !this.sim.physics.raycast(look, d.divideScalar(len), len, groups(0xffff, GROUP.STATIC));
+  }
+
+  /** The replay has run out and been stamped: what next? */
+  private highlightDone() {
+    const hl = this.hl!;
+    if (hl.recording) {
+      void this.finishClip();
+      return;
+    }
+    const again = btn('↺ Watch again', () => {
+      this.cinema.buttons([]);
+      this.cinema.stamp(null);
+      this.playHighlight(hl.h, { ...hl, recording: false });
+    }, 'small');
+    const save = canRecordClips() ? btn('Save clip', () => this.recordClip(), 'small primary') : null;
+    this.cinema.buttons([again, ...(save ? [save] : []), btn('Done', () => this.endHighlight(), 'small go')]);
+    this.cinema.skip(null);
+  }
+
+  private endHighlight() {
+    const hl = this.hl;
+    if (!hl) return;
+    if (this.clip.active) {
+      void this.clip.stop();
+      this.audio.capture(false);
+    }
+    this.hl = null;
     this.replay.stopPlay();
+    this.cinema.show(false);
+    this.dog.paused = false;
     this.mode = 'explore';
-    this.cam.set('eyes');
+    this.setHudVisible(true);
+    this.view.sync(0);
+    this.cam.set('eyes', true);
+    hl.then();
+  }
+
+  /** 🎬 Save clip: play the highlight again while recording it, then offer it to share. */
+  private recordClip() {
+    const hl = this.hl;
+    if (!hl) return;
+    this.audio.unlock();
+    try {
+      this.clip.start(this.r.renderer.domElement, this.audio.capture(true));
+    } catch {
+      this.toasts.show('This browser can’t record clips. Sorry!', '', 2600);
+      return;
+    }
+    this.cinema.buttons([]);
+    this.cinema.stamp(null);
+    this.playHighlight(hl.h, { ...hl, recording: true });
+  }
+
+  private async finishClip() {
+    const hl = this.hl!;
+    const res = await this.clip.stop();
+    this.audio.capture(false);
+    this.cinema.stamp(null);
+    hl.recording = false;
+    this.cinema.setTag('');
+    if (!res) {
+      this.toasts.show('Hmm, the clip came out empty. Try again?', '', 2600);
+      this.highlightDone();
+      return;
+    }
+    const url = URL.createObjectURL(res.blob);
+    const video = h('video', { src: url, autoplay: '', loop: '', playsinline: '', class: 'clip-preview' });
+    video.muted = true;
+    const done = () => {
+      URL.revokeObjectURL(url);
+      this.modal.hide();
+      this.endHighlight();
+    };
+    this.modal.show(
+      [
+        h('h2', {}, 'Your clip is ready'),
+        video,
+        h('p', { class: 'muted' }, 'Show everyone what you built.'),
+        h(
+          'div',
+          { class: 'row' },
+          btn('Share or save', () => {
+            void shareClip(res.blob, res.ext, hl.title).then((how) => how === 'downloaded' && this.toasts.show('Saved! Look in your downloads.', 'new', 2600));
+          }, 'go'),
+          btn('Done', done),
+        ),
+      ],
+      'clip',
+    );
   }
 
   // ================================================================== events
@@ -1950,7 +2211,9 @@ export class Game {
       if (this.running || this.testMachine !== null) this.journal.event(e);
       if (this.running) this.probe.event(e);
       if (this.push && !this.push.done) this.push.probe.event(e);
+      this.replay.event(e);
       this.eventFx(e);
+      this.react(e);
     }
     for (const oe of this.sim.objectiveEvents.splice(0)) {
       if (oe.type === 'success') this.onSuccess(oe.bonuses, oe.time);
@@ -1972,12 +2235,22 @@ export class Game {
         if (e.impulse > 3 && (e.mat === 'metal' || e.other === 'metal')) this.fx.emit('spark', e.pos, 8);
         // Hard knocks between anything else get a small puff where they met, so a collision reads even with the sound off.
         else if (e.impulse > 3 && !ground) this.fx.emit('dust', e.pos, Math.min(8, Math.floor(e.impulse / 2)), { speed: 0.8 });
+        if (e.impulse > 14) {
+          // Something BIG hit: you hear it, you feel it.
+          A.play('crash', e.pos, Math.min(1, e.impulse / 40));
+          const near = 1 / (1 + this.r.camera.position.distanceTo(e.pos) * 0.12);
+          this.cam.shake(Math.min(0.85, (e.impulse / 45) * near + 0.15));
+          this.fx.emit('dust', e.pos.clone().setY(Math.max(0.05, e.pos.y)), 12, { speed: 2 });
+          this.fx.emit('chip', e.pos, 8, { color: 0x8a6a44 });
+          if (e.impulse > 25) buzz(30);
+        }
         break;
       }
       case 'break':
         A.play('break', e.pos);
         this.fx.emit('chip', e.pos, 16);
         this.fx.emit('dust', e.pos, 8);
+        this.cam.shake(0.35);
         break;
       case 'snap':
         A.play('snap', e.pos);
@@ -2061,6 +2334,9 @@ export class Game {
   private onSuccess(bonuses: { def: { id: string; label: string }; earned: boolean }[], time: number) {
     if (this.succeeded || !this.projectId) return;
     this.succeeded = true;
+    this.successAt = this.replay.t;
+    // A machine did it: start the replay when the test started. By hand: the last few seconds.
+    this.successFrom = this.running ? this.runStartT : 0;
     this.hideResults();
     const p = PROJECT_MAP[this.projectId];
     const byMachine = this.running && bonuses.some((b) => b.def.id === 'hands_off' && b.earned);
@@ -2069,34 +2345,326 @@ export class Game {
     this.save.session = null;
     writeSave(this.save);
     this.audio.play('success');
+    setTimeout(() => this.audio.play('cheer'), 650);
     const focus = this.sim.itemByTag('target');
     const at = focus ? toV(focus.rb.translation()) : this.sim.eye();
     for (let i = 0; i < 4; i++) setTimeout(() => this.fx.emit('confetti', at.clone().add(new THREE.Vector3(0, 0.5, 0)), 40), i * 180);
+    // Everybody celebrates: a jump for joy, Biscuit loses his mind, Mom waves from the kitchen.
     this.input.unlockPointer();
+    if (this.cam.mode === 'eyes') this.cam.hop();
+    this.kid('success', 1, true);
+    this.dog.party();
+    this.mom.wave(4);
+    setTimeout(() => this.momSay('success', true), 900);
+    // Then the instant replay of how it happened, and the card.
+    const card = () => this.showSuccess(p, bonuses, time, unlocked, byMachine);
+    const project = p.id;
     setTimeout(() => {
-      const nextId = PROJECTS.find((x) => this.save.unlocked.includes(x.id) && !this.save.completed[x.id])?.id;
-      const wagon = p.deliverable === 'wagon';
-      const content: Node[] = [
-        h('div', { class: 'muted' }, `${p.title} · solved in ${fmtTime(time)}`),
-        h('h1', {}, byMachine || wagon ? 'I BUILT THAT.' : 'GOT IT!'),
-        h('p', {}, wagon ? 'The wagon works. It’s mine now: it rolls along behind me in every project from here on.' : byMachine ? `The ${p.target} is back, and a machine you made did it.` : `The ${p.target} is back. However you did it, it counts.`),
-        ...bonuses.map((b) => h('div', { class: `bonus ${b.earned ? 'got' : 'miss'}` }, h('i', {}, b.earned ? '★' : ''), b.def.label)),
-      ];
-      if (unlocked.sandbox) content.push(h('p', {}, 'Sandbox unlocked! Every part there is, as many as you want.'));
-      if (unlocked.projects.length) content.push(h('p', {}, `New: ${unlocked.projects.map((id) => PROJECT_MAP[id].title).join(', ')}`));
-      content.push(h('p', { class: 'muted' }, wagon ? 'Build something. Test it. Use it. Now… what else needs building?' : 'Wait. What ELSE can I build?'));
-      const row = h('div', { class: 'row' });
-      if (nextId) row.append(btn(`▶ ${PROJECT_MAP[nextId].title}`, () => this.startProject(nextId), 'go'));
-      if (this.save.sandbox) row.append(btn('Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
-      row.append(btn('Keep tinkering', () => this.modal.hide()));
-      content.push(row);
-      this.modal.show(content, 'brief');
-    }, 1400);
+      if (this.projectId !== project || this.mode === 'replay') return;
+      if (this.mode !== 'explore') {
+        card();
+        return;
+      }
+      const hl = this.successHighlight();
+      if (hl) this.playHighlight(hl, { stamp: 'IT WORKED!', title: p.title, sub: `solved in ${fmtTime(time)}`, then: card });
+      else card();
+    }, 1900);
+  }
+
+  /** The few seconds that mattered, centred on the thing that got rescued (or the wagon). */
+  private successHighlight(): Highlight | null {
+    const target = this.sim.itemByTag('target');
+    const prefer = (k: string) => (target ? k === `i${target.id}` : k === 'wagon');
+    const from = Math.max(this.successAt - 7, this.replay.first, this.successFrom);
+    const hl = this.replay.highlight(from, Math.min(this.replay.t, this.successAt + 1.4), prefer);
+    // Only worth it if something visibly happened.
+    return hl && hl.topSpeed > 0.6 ? hl : null;
+  }
+
+  private showSuccess(p: ProjectDef, bonuses: { def: { id: string; label: string }; earned: boolean }[], time: number, unlocked: { projects: string[]; sandbox: boolean }, byMachine: boolean) {
+    this.input.unlockPointer();
+    const nextId = PROJECTS.find((x) => this.save.unlocked.includes(x.id) && !this.save.completed[x.id])?.id;
+    const wagon = p.deliverable === 'wagon';
+    const content: Node[] = [
+      h('div', { class: 'muted' }, `${p.title} · solved in ${fmtTime(time)}`),
+      h('h1', { class: 'win' }, byMachine || wagon ? 'I BUILT THAT.' : 'GOT IT!'),
+      h('p', {}, wagon ? 'The wagon works. It’s mine now: it rolls along behind me in every project from here on.' : byMachine ? `The ${p.target} is back, and a machine you made did it.` : `The ${p.target} is back. However you did it, it counts.`),
+      ...bonuses.map((b) => h('div', { class: `bonus ${b.earned ? 'got' : 'miss'}` }, h('i', {}, b.earned ? '★' : ''), b.def.label)),
+    ];
+    if (unlocked.sandbox) content.push(h('p', {}, 'Sandbox unlocked! Every part there is, as many as you want.'));
+    if (unlocked.projects.length) content.push(h('p', {}, `New: ${unlocked.projects.map((id) => PROJECT_MAP[id].title).join(', ')}`));
+    content.push(h('p', { class: 'muted' }, wagon ? 'Build something. Test it. Use it. Now… what else needs building?' : 'Wait. What ELSE can I build?'));
+    const hl = this.successHighlight();
+    if (hl) {
+      const show = (recording: boolean) => {
+        this.modal.hide();
+        const o = { stamp: 'IT WORKED!', title: p.title, sub: `solved in ${fmtTime(time)}`, then: () => this.showSuccess(p, bonuses, time, unlocked, byMachine) };
+        if (recording && canRecordClips()) {
+          this.playHighlight(hl, o);
+          this.recordClip();
+        } else this.playHighlight(hl, o);
+      };
+      content.push(h('div', { class: 'row' }, btn('Watch the replay', () => show(false), 'small'), canRecordClips() ? btn('Save a clip', () => show(true), 'small primary') : null));
+    }
+    const row = h('div', { class: 'row' });
+    if (nextId) row.append(btn(`▶ ${PROJECT_MAP[nextId].title}`, () => this.startProject(nextId), 'go'));
+    if (this.save.sandbox) row.append(btn('Sandbox', () => this.startSandbox(), nextId ? '' : 'go'));
+    row.append(btn('Keep tinkering', () => this.modal.hide()));
+    content.push(row);
+    this.modal.show(content, 'brief');
+  }
+
+  // ================================================================== life: the kid, Biscuit and Mom
+
+  /** The kid thinking out loud. Rate-limited so it stays charming. */
+  private kid(cue: KidCue, chance = 1, force = false) {
+    if (Math.random() > chance) return;
+    if (!force && (this.modal.open || this.mode !== 'explore' || this.time - this.lastKid < 9)) return;
+    this.lastKid = this.time;
+    this.thought.say(this.kidLines.pick(cue), cue === 'success' ? 2400 : 2800);
+    if (cue === 'success') {
+      this.thought.el.classList.remove('cheer');
+      void this.thought.el.offsetWidth;
+      this.thought.el.classList.add('cheer');
+    }
+  }
+
+  /** Mom, calling from the kitchen window. */
+  private momSay(cue: MomCue, force = false, line?: string) {
+    if (!force && (this.time - this.lastMom < 45 || this.momSaid.has(cue))) return;
+    this.lastMom = this.time;
+    this.momSaid.add(cue);
+    if (cue === 'crash' || cue === 'ignite') this.mom.alarm();
+    else this.mom.wave(3);
+    this.toasts.show(`<b>MOM</b> <small>(from the kitchen)</small><br>${line ?? this.momLines.pick(cue)}`, 'mom', 3800);
+  }
+
+  /** Live reactions to what the simulation just did (never during replays). */
+  private react(e: SimEvent) {
+    if (this.mode === 'coldopen') {
+      if (e.type === 'break' && this.co && this.co.crashT === null) this.coldOpenCrash();
+      return;
+    }
+    switch (e.type) {
+      case 'ignite':
+        this.kid('ignite', 0.8);
+        if (this.running) this.momSay('ignite');
+        break;
+      case 'break':
+        if (this.running) this.kid('break', 0.7);
+        break;
+      case 'impact':
+        if (e.impulse > 20 && this.running) {
+          this.kid('crash', 0.7);
+          this.momSay('crash');
+          this.dog.bark(2);
+        }
+        break;
+      case 'brownout':
+        this.kid('brownout', 0.8);
+        break;
+      case 'bounce':
+        this.kid('bounce', 0.3);
+        break;
+    }
+  }
+
+  private petDog() {
+    this.dog.pet();
+    this.fx.emit('heart', this.dog.headPos.add(new THREE.Vector3(0, 0.25, 0)), 6);
+    buzz(10);
+    this.kid('pet', 1, true);
+  }
+
+  /** Biscuit, Mom, whooshes: everything that makes the yard feel alive. Runs every frame. */
+  private updateLife(dt: number) {
+    const movers: Mover[] = [];
+    if (this.mode !== 'replay' && this.mode !== 'build') {
+      for (const it of this.sim.items.values()) {
+        if (this.sim.carried?.item === it) continue;
+        const sp = toV(it.rb.linvel()).length();
+        if (sp > 2.5) movers.push({ pos: toV(it.rb.translation()), speed: sp });
+      }
+      for (const m of this.sim.machines.values()) {
+        if (m.state !== 'running') continue;
+        const b = m.bodies[0];
+        const sp = toV(b.rb.linvel()).length();
+        if (sp > 2.5) movers.push({ pos: toV(b.rb.translation()), speed: sp });
+      }
+    }
+    const kid = this.sim.player ? toV(this.sim.player.translation()) : this.sim.eye();
+    this.dog.update(dt, this.time, { kid, movers });
+    this.mom.update(dt, this.time);
+    // Whooshes for anything zipping past, and the kid noticing.
+    for (const [k, v] of this.zoomCd) {
+      if (v - dt <= 0) this.zoomCd.delete(k);
+      else this.zoomCd.set(k, v - dt);
+    }
+    if (this.mode === 'explore' || this.mode === 'coldopen') {
+      for (const m of this.sim.machines.values()) {
+        if (m.state !== 'running') continue;
+        for (const b of m.bodies) {
+          const v = toV(b.rb.linvel()).length();
+          const p = toV(b.rb.translation());
+          const key = `m${m.id}:${b.rb.handle}`;
+          if (v > 6.5 && !this.zoomCd.has(key) && p.distanceTo(this.r.camera.position) < 22) {
+            this.zoomCd.set(key, 1.4);
+            this.audio.play('zoom', p, Math.min(1, (v - 5) / 8));
+          }
+          if (this.running && v > 6 && !this.runSaid.has('fast')) {
+            this.runSaid.add('fast');
+            this.kid('fast', 0.7);
+          }
+          if (this.running && p.y > 2.6 && !this.runSaid.has('fly')) {
+            this.runSaid.add('fly');
+            this.kid('fly', 0.8);
+          }
+        }
+      }
+    }
+  }
+
+  // ================================================================== the cold open
+
+  /**
+   * Before any menus or cards: the kid's latest invention is already on the
+   * lawn. Countdown, ignition, a real crash into the fence, the ball sailing
+   * next door, Mom at the window, Biscuit barking. Then the title.
+   */
+  playColdOpen(thenPlay: boolean) {
+    this.modal.hide();
+    this.hideTitle();
+    this.audio.unlock();
+    this.clearMusings();
+    this.hideResults();
+    this.mode = 'coldopen';
+    this.projectId = null;
+    this.sandbox = false;
+    this.setHudVisible(false);
+    this.input.unlockPointer();
+    this.newSim(null, true);
+    this.sim.teleportPlayer(COLD_OPEN.kid, 0);
+    const bp = rocketCart();
+    const cart = this.sim.addMachine(bp, cartPlacement(bp));
+    const ball = this.sim.spawnItem({ part: 'playground_ball', pos: ballSpot() });
+    this.dog.sitAt(new THREE.Vector3(...COLD_OPEN.dog), cart.center());
+    const pos = new THREE.Vector3(11.8, 0.5, 7.2);
+    const look = cart.center().add(new THREE.Vector3(0, 0.15, 0));
+    this.co = { t: 0, crashT: null, cart, ball, ignited: false, cues: new Set(), look, pos, thenPlay };
+    this.cam.intro.p.copy(pos);
+    this.cam.intro.look.copy(look);
+    this.cam.set('intro', true);
+    this.cinema.show(true);
+    this.cinema.bottom('', '');
+    this.cinema.skip(() => this.finishColdOpen());
+    this.cinema.caption('SATURDAY MORNING', 'The Rocket Cart · attempt #1');
+  }
+
+  private coldOpenCrash() {
+    const c = this.co!;
+    c.crashT = c.t;
+    // The ball keeps going. Over the fence it goes.
+    flingBall(c.ball.rb);
+    this.cam.shake(1);
+    this.cinema.flash();
+    this.audio.play('crash', c.cart.center(), 1);
+    buzz(40);
+  }
+
+  private updateColdOpen(dt: number) {
+    const c = this.co;
+    if (!c) return;
+    c.t += dt;
+    const once = (id: string, at: boolean, fn: () => void) => {
+      if (at && !c.cues.has(id)) {
+        c.cues.add(id);
+        fn();
+      }
+    };
+    // Time runs slow for a moment right as it hits.
+    let scale = 1;
+    const k = c.crashT === null ? -1 : c.t - c.crashT;
+    if (k >= 0) scale = k < 1.5 ? 0.2 : k < 2.2 ? 0.2 + ((k - 1.5) / 0.7) * 0.8 : 1;
+    this.stepSim(dt * scale);
+    this.view.sync(dt * scale);
+    const T = COLD_OPEN.igniteAt;
+    once('cap-off', c.t > 2.2, () => this.cinema.caption(null));
+    once('think', c.t > 1.0, () => this.thought.say('Okay. Rocket Cart. Attempt number one.', 2600));
+    once('3', c.t > T - 1.5, () => (this.cinema.countdown('3'), this.audio.play('beep')));
+    once('2', c.t > T - 1.0, () => (this.cinema.countdown('2'), this.audio.play('beep')));
+    once('1', c.t > T - 0.5, () => (this.cinema.countdown('1'), this.audio.play('beep')));
+    once('go', c.t > T, () => {
+      this.cinema.countdown('GO!');
+      this.audio.play('beepGo');
+      this.sim.goAll();
+      c.ignited = true;
+    });
+    once('go-off', c.t > T + 0.6, () => this.cinema.countdown(null));
+    // Failsafe: if nothing broke, carry on as if it had.
+    if (c.ignited && c.crashT === null && c.t > T + 3.5) c.crashT = c.t;
+    const cart = c.cart.center();
+    const ball = toV(c.ball.rb.translation());
+    if (k < 0) {
+      if (!c.ignited) {
+        // A slow push-in on the contraption, low to the grass.
+        c.pos.lerp(new THREE.Vector3(10.9, 0.42, 6.4), 1 - Math.exp(-dt * 0.35));
+        c.look.lerp(cart.clone().add(new THREE.Vector3(0.2, 0.15, 0)), 1 - Math.exp(-dt * 3));
+      } else {
+        // Tracking alongside as it rips across the lawn.
+        c.pos.lerp(new THREE.Vector3(cart.x - 0.4, 0.7, cart.z + 3.1), 1 - Math.exp(-dt * 6));
+        c.look.lerp(cart.clone().add(new THREE.Vector3(1.4, 0.2, 0)), 1 - Math.exp(-dt * 8));
+      }
+    } else {
+      // Pull wide and follow the ball over the fence.
+      c.pos.lerp(new THREE.Vector3(10.2, 1.7, 10.4), 1 - Math.exp(-dt * 1.6));
+      const watch = k < 6 ? ball.clone().lerp(new THREE.Vector3(14.6, 1.2, 5.2), 0.25) : new THREE.Vector3(13.6, 1.0, 6);
+      c.look.lerp(watch, 1 - Math.exp(-dt * 3.5));
+      once('mom', k > 0.5, () => this.momSay('crash', true, 'WHAT WAS THAT?!'));
+      once('dog', k > 0.2, () => {
+        this.dog.chase(ball);
+        this.dog.bark(3);
+      });
+      once('k1', k > 4.2, () => this.thought.say('…okay.', 2400));
+      once('k2', k > 6.6, () => this.thought.say('Note to self: brakes.', 2600));
+      once('k3', k > 9.2, () => this.thought.say('And maybe… start with something smaller.', 3000));
+      once('end', k > 12, () => this.coldOpenTitle());
+    }
+    this.cam.intro.p.copy(c.pos);
+    this.cam.intro.look.copy(c.look);
+  }
+
+  /** The title slams in over the wreckage. */
+  private coldOpenTitle() {
+    this.thought.hide();
+    this.audio.play('slam');
+    this.cam.shake(0.5);
+    this.cinema.skip(null);
+    this.cinema.logo('A kid. A problem. A yard full of junk.', btn(this.co?.thenPlay ? '▶ Let’s build something' : '▶ Back to the title', () => this.finishColdOpen(), 'go'));
+  }
+
+  private finishColdOpen() {
+    const c = this.co;
+    if (!c) return;
+    this.co = null;
+    this.thought.hide();
+    this.cinema.show(false);
+    this.save.seenOpening = true;
+    writeSave(this.save);
+    if (c.thenPlay) this.startProject(PROJECTS[0].id);
+    else {
+      // Back to the title: showTitle rebuilds its own backdrop.
+      this.titleHero = null;
+      this.showTitle();
+    }
   }
 
   // ================================================================== keys
 
   private key(k: string) {
+    if (this.mode === 'coldopen') {
+      if (k === 'escape' || k === ' ' || k === 'enter') this.finishColdOpen();
+      return;
+    }
     if (this.modal.open) {
       if (k === 'escape' && this.mode !== 'title') this.modal.hide();
       return;
@@ -2107,7 +2675,7 @@ export class Game {
     }
     if (this.mode === 'build') return;
     if (this.mode === 'replay') {
-      if (k === 'escape' || k === 'v') this.stopReplay();
+      if (k === 'escape' || k === 'v') this.endHighlight();
       return;
     }
     if (this.mode !== 'explore' && this.mode !== 'carry') return;
@@ -2166,7 +2734,7 @@ export class Game {
         if (this.save.book.found) this.openBook();
         break;
       case 'v':
-        if (!this.running && this.replay.available) this.startReplay();
+        if (!this.running && this.runCount > 0 && this.replay.available) this.startReplay();
         break;
       case 'escape':
         this.showMenu();
@@ -2183,18 +2751,16 @@ export class Game {
     this.time += dt;
     this.frameDt = dt;
     if (this.mode === 'replay') {
-      if (!this.replay.update(this.view, dt)) {
-        // loop the replay until stopped
-        this.replay.play(this.replay.speed);
-      }
-      const f = this.subject();
-      if (f) this.cam.orbit.center.lerp(f, 0.05);
+      this.updateHighlight(dt);
+    } else if (this.mode === 'coldopen') {
+      this.updateColdOpen(dt);
     } else {
       const paused = this.modal.open && this.mode !== 'title';
       if (!paused) this.stepSim(dt);
       this.view.sync(dt);
       this.replay.record(this.view, dt);
     }
+    this.updateLife(dt);
     if (this.mode === 'intro') this.updateIntro(dt);
     if (this.mode === 'carry') this.updateCarry();
     if (this.mode === 'build') this.build.update(dt);
@@ -2217,6 +2783,10 @@ export class Game {
     this.fx.update(dt);
     this.r.followShadows(this.cam.mode === 'eyes' ? this.sim.eye() : this.r.camera.position.clone().lerp(this.subject() ?? this.sim.eye(), 0.7));
     this.r.render();
+    if (this.clip.active && this.hl) {
+      const h = this.hl;
+      this.clip.frame(this.r.renderer.domElement, { title: h.title, sub: h.sub, stamp: h.freeze > 0 ? h.stamp : null, stampT: h.freeze * 4, tag: 'INSTANT REPLAY', slowmo: this.replay.playing && this.replay.speed < 0.6 }, dt);
+    }
     if (this.saveTimer > 0) {
       this.saveTimer -= dt;
       if (this.saveTimer <= 0) this.persist();
@@ -2359,7 +2929,7 @@ export class Game {
   }
 
   private updateHud() {
-    if (this.mode === 'title' || this.mode === 'intro' || this.mode === 'build') return;
+    if (this.mode === 'title' || this.mode === 'coldopen' || this.mode === 'intro' || this.mode === 'build') return;
     if (this.mode === 'replay') return;
     const proj = this.projectId ? PROJECT_MAP[this.projectId] : null;
     const title = this.sandbox ? 'SANDBOX' : proj?.title ?? '';

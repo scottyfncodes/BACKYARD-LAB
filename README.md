@@ -31,6 +31,15 @@ You can build an RC car that drives under the gap in the fence and drags the bal
 
 The **sandbox** unlocks after the first project: every part, unlimited, no rules.
 
+## Show it, then let them play
+
+- **The cold open.** A brand-new kid taps Play and the last invention is already on the lawn: the **Rocket Cart**, a plank on lawnmower wheels with two soda bottle rockets and a bucket. Countdown, ignition, a tracking shot as it rips across the grass, and a real crash into the fence (the simulation tears off its wheels and bucket; `tests/coldopen.test.ts` keeps it that way). Time slows down, the ball sails next door, Mom yells from the kitchen, Biscuit runs barking to the fence. *"…okay. Note to self: brakes."* Then the title slams in and Mission 0 starts. It plays once (`seenOpening` in the save); **Settings → The opening** shows it again. All of it is in `src/game/coldopen.ts` and `Game.playColdOpen`.
+- **Instant replays.** The last 30 seconds are always recording, sounds included (`src/game/replay.ts`). When a project is solved, the game plays back the moment it happened: a camera that picks a side it can see from, slow motion at the fastest moment, and an **IT WORKED!** stamp. Any test can be replayed from the results card (stamped *TAKE 3*).
+- **Clips to share.** **Save clip** records the replay to a video in the browser (letterbox, title and stamp painted in, game audio mixed in; `src/game/clip.ts`) and opens the share sheet or downloads it. No server.
+- **Biscuit** (`src/render/dog.ts`) trots after the kid, chases anything fast, barks at whatever goes over the fence, sits by the shed in BISCUIT'S BALL, and can be petted. **Mom** (`src/render/mom.ts`) comes and goes at the kitchen window, waves when something works and throws her hands up at a crash; her margin notes show up when book pages come unstuck. Neither touches the simulation.
+- **The kid talks** while things happen (*"Note to self: more tape."*, *"Look at it GO!"*), rate-limited and never judgmental (`src/data/banter.ts`, tested). Success gets a jump for joy, a party horn and a dog doing laps.
+- **Feel.** Parts squash and stretch as they snap on and wheels wobble on their new axles; big hits shake the camera and boom; fast things whoosh past.
+
 ## Play
 
 ```bash

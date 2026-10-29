@@ -1193,3 +1193,122 @@ body.coaching .actions.lefttop { top: calc(var(--coach-b, 158px) + 10px); }
 @media (max-width: 600px) and (min-height: 481px) {
   .mode-ribbon { top: calc(66px + var(--safe-t)); }
 }
+
+/* ---------------------------------------------------------------- cinema: cold open + instant replays */
+.cinema { position: fixed; inset: 0; z-index: 4; pointer-events: none; }
+.cinema > * { pointer-events: none; }
+.cinema .btn, .cinema .cine-buttons { pointer-events: auto; }
+.cine-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 9vh;
+  min-height: 34px;
+  background: #000;
+  color: #fff6e3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 calc(16px + var(--safe-r)) 0 calc(16px + var(--safe-l));
+  font-weight: 900;
+  animation: bar-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cine-bar.top { top: 0; }
+.cine-bar.bottom { bottom: 0; animation-name: bar-in-b; }
+@keyframes bar-in { from { transform: translateY(-100%); } }
+@keyframes bar-in-b { from { transform: translateY(100%); } }
+.cine-logo { font-size: 15px; letter-spacing: 0.04em; }
+.cine-logo b { color: var(--orange); margin-left: 5px; }
+.cine-tag { color: #ff5a4a; font-size: 13px; letter-spacing: 0.08em; animation: blink 1s steps(2) infinite; }
+.cinema.slowmo .cine-tag { color: #ffd27a; animation: none; }
+.cinema.slowmo .cine-tag::before { content: 'SLOW-MO · '; }
+@keyframes blink { 50% { opacity: 0.25; } }
+.cine-title { font-size: 15px; }
+.cine-sub { font-size: 13px; color: #d8c8a8; }
+.cine-caption {
+  position: absolute;
+  left: calc(22px + var(--safe-l));
+  top: calc(max(9vh, 34px) + 14px);
+  color: #fff;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+  font-weight: 1000;
+  font-size: clamp(22px, 5vw, 40px);
+  letter-spacing: 0.06em;
+  opacity: 0;
+  transition: opacity 0.6s;
+}
+.cine-caption small { display: block; font-size: 0.45em; letter-spacing: 0.04em; font-weight: 800; opacity: 0.9; }
+.cine-caption.on { opacity: 1; }
+.cine-caption.in div { animation: type-on 0.9s steps(16) both; overflow: hidden; white-space: nowrap; }
+@keyframes type-on { from { max-width: 0; } to { max-width: 100%; } }
+.cine-count {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(90px, 26vh, 200px);
+  font-weight: 1000;
+  color: #fff;
+  -webkit-text-stroke: 5px var(--ink);
+  text-shadow: 0 8px 0 rgba(0, 0, 0, 0.35);
+  opacity: 0;
+}
+.cine-count.on { opacity: 1; }
+.cine-count.pop { animation: count-pop 0.5s cubic-bezier(0.2, 1.6, 0.4, 1); }
+@keyframes count-pop { from { transform: scale(2.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.cine-stamp {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%) rotate(-9deg);
+  border: 6px solid var(--red);
+  color: var(--red);
+  background: rgba(255, 246, 227, 0.88);
+  border-radius: 14px;
+  padding: 6px 24px;
+  font-size: clamp(34px, 9vh, 64px);
+  font-weight: 1000;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  opacity: 0;
+}
+.cine-stamp.on { opacity: 1; animation: stamp 0.32s cubic-bezier(0.5, 0, 0.75, 0) both; }
+@keyframes stamp { from { transform: translate(-50%, -50%) rotate(-9deg) scale(3); opacity: 0; } to { transform: translate(-50%, -50%) rotate(-9deg) scale(1); opacity: 1; } }
+.cine-flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+.cine-flash.go { animation: flash 0.5s ease-out; }
+@keyframes flash { from { opacity: 0.85; } to { opacity: 0; } }
+.cine-buttons {
+  position: absolute;
+  left: 50%;
+  bottom: calc(9vh + 16px);
+  transform: translateX(-50%);
+  display: none;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+}
+.cine-buttons.on { display: flex; animation: pop 0.3s ease-out; }
+.cine-buttons.center { inset: 0; transform: none; width: auto; max-width: none; align-items: center; justify-content: center; bottom: auto; top: 0; height: 100%; }
+.cine-logo-card { text-align: center; color: #fff; text-shadow: 0 4px 0 rgba(0, 0, 0, 0.4); animation: slam 0.45s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
+.cine-logo-card .logo { font-size: clamp(54px, 15vh, 110px); -webkit-text-stroke: 3px var(--ink); }
+.cine-logo-card p { font-weight: 800; font-size: 18px; margin: 8px 0 16px; }
+@keyframes slam { from { transform: scale(2.6) rotate(-6deg); opacity: 0; } to { transform: scale(1) rotate(-2deg); opacity: 1; } }
+.cine-skip { position: absolute; top: calc(9vh + 10px); right: calc(12px + var(--safe-r)); opacity: 0.85; }
+body.cinematic .thought { z-index: 5; bottom: calc(max(9vh, 34px) + 14px) !important; }
+body.cinematic .toasts { z-index: 5; top: calc(9vh + 12px); }
+.clip-preview { width: 100%; max-height: 42vh; border-radius: 12px; border: 3px solid var(--ink); background: #000; display: block; margin: 8px 0; }
+
+/* The kid celebrating */
+.thought.cheer { font-size: 24px; animation: cheer 0.6s cubic-bezier(0.3, 1.8, 0.5, 1); }
+@keyframes cheer { 0% { scale: 0.4; } 60% { scale: 1.25; } 100% { scale: 1; } }
+.win { animation: slam 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
+
+/* Mom: sticky notes in her handwriting */
+.hand, .toast.mom { font-family: 'Caveat', 'Bradley Hand', 'Segoe Print', 'Comic Sans MS', 'Chalkboard SE', cursive; }
+.toast.mom { background: #fff7a8; transform: rotate(1.5deg); font-size: 19px; font-weight: 700; border-radius: 4px; }
+.toast.mom b { font-family: ui-rounded, 'Nunito', system-ui, sans-serif; font-size: 13px; letter-spacing: 0.08em; }
+.toast.mom small { font-family: ui-rounded, 'Nunito', system-ui, sans-serif; font-size: 11px; opacity: 0.7; }
+.toast.note .hand { display: block; font-size: 17px; font-weight: 700; margin-top: 4px; line-height: 1.15; }

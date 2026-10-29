@@ -157,3 +157,16 @@ describe('progression', () => {
     expect(s.hintsSeen.kite_in_tree).toBeUndefined();
   });
 });
+
+describe('the opening', () => {
+  it('plays for a brand new kid, and not again once seen or for anyone who has already played', () => {
+    expect(defaultSave().seenOpening).toBe(false);
+    const s = defaultSave();
+    s.seenOpening = true;
+    expect(parseSave(JSON.stringify(s)).seenOpening).toBe(true);
+    const old = defaultSave() as Partial<ReturnType<typeof defaultSave>>;
+    delete old.seenOpening;
+    old.completed = { build_wagon: { bestTime: 60, bonuses: [] } };
+    expect(parseSave(JSON.stringify(old)).seenOpening).toBe(true);
+  });
+});
