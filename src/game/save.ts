@@ -21,6 +21,8 @@ export interface SaveData {
   book: { found: boolean; revealed: string[]; read: string[] };
   /** The first-play coach: finished (or skipped) for good. Replaying it from the menu clears this. */
   tutorial: { done: boolean };
+  /** The cold open (the rocket cart) has been watched, so Play goes straight to the project. */
+  seenOpening: boolean;
   session: SessionData | null;
 }
 
@@ -61,6 +63,7 @@ export function defaultSave(): SaveData {
     wagon: null,
     book: { found: false, revealed: [], read: [] },
     tutorial: { done: false },
+    seenOpening: false,
     session: null,
   };
 }
@@ -133,6 +136,8 @@ export function parseSave(raw: string | null): SaveData {
   const t = j.tutorial as Record<string, unknown> | undefined;
   // (Only for saves from before the tutorial existed: a replay in progress after Mission 0 must survive a reload.)
   d.tutorial.done = t && typeof t === 'object' ? t.done === true : !!d.completed[FIRST_PROJECT];
+  // Anyone who has already played has, one way or another, met the rocket cart.
+  d.seenOpening = j.seenOpening === true || Object.keys(d.completed).length > 0;
   d.session = parseSession(j.session);
   return d;
 }
@@ -215,6 +220,7 @@ export function discover(save: SaveData, partId: string): boolean {
 export function completeProject(save: SaveData, projectId: string, time: number, bonuses: string[]): { projects: string[]; sandbox: boolean } {
   const p = PROJECT_MAP[projectId];
   const prev = save.completed[projectId];
+  save.seenOpening = true;
   save.completed[projectId] = {
     bestTime: prev ? Math.min(prev.bestTime || time, time) : time,
     bonuses: [...new Set([...(prev?.bonuses ?? []), ...bonuses])],

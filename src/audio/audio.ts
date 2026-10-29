@@ -41,6 +41,24 @@ export class Audio {
     if (this.ctx) this.master.gain.setTargetAtTime(on ? 0.8 : 0, this.ctx.currentTime, 0.05);
   }
 
+  /** The game's sound as a stream, for recording clips. Call again with false to stop. */
+  private tap: MediaStreamAudioDestinationNode | null = null;
+  capture(on: boolean): MediaStream | null {
+    if (!this.ctx) return null;
+    if (on) {
+      if (!this.tap) {
+        this.tap = this.ctx.createMediaStreamDestination();
+        this.master.connect(this.tap);
+      }
+      return this.tap.stream;
+    }
+    if (this.tap) {
+      this.master.disconnect(this.tap);
+      this.tap = null;
+    }
+    return null;
+  }
+
   setListener(pos: Vector3, right: Vector3) {
     this.listener.copy(pos);
     this.listenerRight.copy(right);
@@ -246,6 +264,87 @@ export class Audio {
         this.tone(d, t, 784, 0.12, 0.2, 'triangle');
         this.tone(d, t + 0.1, 1175, 0.25, 0.2, 'triangle');
         break;
+      case 'bark': {
+        // WOOF: a throaty burst that drops in pitch, with a bit of growl.
+        const f0 = 420 + Math.random() * 80;
+        this.tone(d, t, f0, 0.16, 0.45, 'sawtooth', f0 * 0.55);
+        this.tone(d, t, f0 * 0.5, 0.14, 0.4, 'square', f0 * 0.3);
+        this.noiseBurst(d, t, 0.12, 900, 1.4, 0.55);
+        break;
+      }
+      case 'crash':
+        // Something BIG hit: a low boom, a crunch and rattling debris.
+        this.tone(d, t, 70, 0.55, 0.9, 'sine', 32);
+        this.noiseBurst(d, t, 0.45, 400, 0.5, 1.0, 'lowpass');
+        this.noiseBurst(d, t + 0.01, 0.2, 2200, 0.9, 0.7);
+        for (let i = 0; i < 5; i++) this.noiseBurst(d, t + 0.12 + i * 0.07 + Math.random() * 0.04, 0.05, 2500 + Math.random() * 2500, 2, 0.35);
+        break;
+      case 'zoom': {
+        // Something flying past: a swept whoosh.
+        const ctx = this.ctx!;
+        const src = ctx.createBufferSource();
+        src.buffer = this.noise;
+        const f = ctx.createBiquadFilter();
+        f.type = 'bandpass';
+        f.Q.value = 1.4;
+        f.frequency.setValueAtTime(500, t);
+        f.frequency.exponentialRampToValueAtTime(2400, t + 0.18);
+        f.frequency.exponentialRampToValueAtTime(400, t + 0.5);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.6, t + 0.15);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+        src.connect(f).connect(g).connect(d);
+        src.start(t, Math.random() * 0.4);
+        src.stop(t + 0.6);
+        break;
+      }
+      case 'beep':
+        this.tone(d, t, 880, 0.14, 0.3, 'square');
+        break;
+      case 'beepGo':
+        this.tone(d, t, 1320, 0.4, 0.3, 'square');
+        break;
+      case 'stamp':
+        // KA-CHUNK.
+        this.tone(d, t, 110, 0.25, 0.8, 'sine', 50);
+        this.noiseBurst(d, t, 0.1, 1200, 0.7, 0.8);
+        break;
+      case 'slam':
+        this.tone(d, t, 90, 0.5, 0.9, 'sine', 40);
+        this.noiseBurst(d, t, 0.3, 600, 0.6, 0.6, 'lowpass');
+        this.tone(d, t + 0.05, 523, 0.5, 0.18, 'triangle');
+        this.tone(d, t + 0.05, 784, 0.6, 0.15, 'triangle');
+        break;
+      case 'cheer': {
+        // Party horn and a couple of whoops.
+        const ctx = this.ctx!;
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(380, t);
+        o.frequency.exponentialRampToValueAtTime(760, t + 0.25);
+        const vib = ctx.createOscillator();
+        vib.frequency.value = 18;
+        const vg = ctx.createGain();
+        vg.gain.value = 25;
+        vib.connect(vg).connect(o.frequency);
+        const f = ctx.createBiquadFilter();
+        f.type = 'lowpass';
+        f.frequency.value = 2200;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.25, t + 0.03);
+        g.gain.setValueAtTime(0.25, t + 0.55);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
+        o.connect(f).connect(g).connect(d);
+        o.start(t);
+        vib.start(t);
+        o.stop(t + 0.8);
+        vib.stop(t + 0.8);
+        this.tone(d, t + 0.75, 500, 0.25, 0.2, 'triangle', 1100);
+        this.tone(d, t + 1.0, 600, 0.3, 0.2, 'triangle', 1400);
+        break;
+      }
       case 'gate':
         this.tone(d, t, 300, 0.5, 0.3, 'sawtooth', 250);
         this.noiseBurst(d, t, 0.3, 900, 3, 0.4);

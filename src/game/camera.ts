@@ -32,6 +32,10 @@ export class CameraDirector {
   yawGoal: number | null = null;
   intro = { p: new THREE.Vector3(), look: new THREE.Vector3() };
   private lastHeading = new THREE.Vector3(0, 0, 1);
+  /** Screen shake: 0..1, decays on its own. Felt, not seen: squared before use. */
+  private trauma = 0;
+  private hopT = 0;
+  private time = 0;
 
   constructor(public camera: THREE.PerspectiveCamera) {}
 
@@ -43,6 +47,16 @@ export class CameraDirector {
     this.blend = instant ? 1 : 0;
     this.blendTime = time;
     if (mode === 'chase') this.chasePos.copy(this.camera.position);
+  }
+
+  /** Rattle the view: a bench clunk is ~0.15, a big crash ~0.7. */
+  shake(amount: number) {
+    this.trauma = Math.min(1, Math.max(this.trauma, amount));
+  }
+
+  /** A little jump for joy (first person). */
+  hop() {
+    this.hopT = 1;
   }
 
   get blending() {
@@ -118,6 +132,21 @@ export class CameraDirector {
       const e = ease(this.blend);
       p = this.from.p.clone().lerp(p, e);
       q = this.from.q.clone().slerp(q, e);
+    }
+    this.time += dt;
+    if (this.trauma > 0) {
+      const k = this.trauma * this.trauma;
+      const n = (o: number) => Math.sin(this.time * 47 + o) * 0.6 + Math.sin(this.time * 83 + o * 2.3) * 0.4;
+      const scale = this.mode === 'bench' ? 0.04 : 0.09;
+      p = p.clone().add(new THREE.Vector3(n(1), n(2), n(3)).multiplyScalar(k * scale));
+      q = q.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(n(4) * k * 0.03, n(5) * k * 0.03, n(6) * k * 0.05)));
+      this.trauma = Math.max(0, this.trauma - dt * 1.6);
+    }
+    if (this.hopT > 0) {
+      this.hopT = Math.max(0, this.hopT - dt / 1.2);
+      // Two bounces, the second smaller.
+      const u = 1 - this.hopT;
+      p = p.clone().setY(p.y + Math.abs(Math.sin(u * Math.PI * 2)) * 0.28 * (u < 0.5 ? 1 : 0.55));
     }
     this.camera.position.copy(p);
     this.camera.quaternion.copy(q);

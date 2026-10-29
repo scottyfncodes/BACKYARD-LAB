@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /** A single pooled particle system for dust, sparks, chips, smoke, confetti, wind. */
-export type FxKind = 'dust' | 'spark' | 'chip' | 'smoke' | 'confetti' | 'air' | 'flame' | 'water';
+export type FxKind = 'dust' | 'spark' | 'chip' | 'smoke' | 'confetti' | 'air' | 'flame' | 'water' | 'heart';
 
 interface P {
   pos: THREE.Vector3;
@@ -141,6 +141,14 @@ export class Effects {
           p.color.set(0xffffff);
           p.alpha = 0.5;
           p.drag = 0.4;
+          break;
+        case 'heart':
+          // Little pink puffs floating up from a happy dog.
+          p.vel.set(r() * 0.35, 0.7 + Math.random() * 0.5, r() * 0.35);
+          p.max = 1.3 + Math.random() * 0.5;
+          p.size = 0.06 + Math.random() * 0.03;
+          p.color.set(Math.random() > 0.4 ? 0xff5c8a : 0xff9fb8);
+          p.drag = 0.8;
           break;
         case 'water':
           p.vel.copy(dir).multiplyScalar(sp).add(new THREE.Vector3(r() * 0.5, r() * 0.5, r() * 0.5));
