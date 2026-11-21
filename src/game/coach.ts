@@ -148,7 +148,7 @@ export const WAGON_STEPS: CoachStep[] = [
     beat: 'use',
     done: (s) => s.everHitched || s.solved,
     title: () => 'Grab the handle',
-    tip: (s) => (s.touch ? 'Look at your wagon and tap PULL.' : 'Look at your wagon and press P (or click PULL).'),
+    tip: (s) => (s.touch ? 'Stand at the handle and tap PULL.' : 'Stand at the handle and press P (or click PULL).'),
     target: () => ({ ui: '.actions [data-act="hitch"]', world: 'wagon' }),
   },
   {

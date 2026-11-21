@@ -32,6 +32,7 @@ import type { Idea } from '../data/ideas';
 import { transformPoint } from '../sim/geom';
 import type { WagonNote } from '../sim/wagonbuild';
 import type { PushVerdict } from './pushtest';
+import { FEEL } from '../data/feel';
 
 export interface Stash {
   infinite: boolean;
@@ -883,7 +884,8 @@ export class BuildMode {
       .filter((c) => this.studs[c.i].part !== null)
       .map((c) => ({ i: c.i, d: Math.hypot(c.x - start.x, c.y - start.y) }))
       .sort((a, b) => a.d - b.d);
-    const pool = [...cands.filter((c) => this.studs[c.i].special), ...cands.filter((c) => !this.studs[c.i].special).slice(0, 36)];
+    // Wheels weigh up the whole machine (its far side and its ends), so a mirrored spot is always in the running.
+    const pool = [...cands.filter((c) => this.studs[c.i].special), ...cands.filter((c) => !this.studs[c.i].special).slice(0, wheelish ? 160 : 36)];
     const com = new THREE.Vector3();
     let total = 0;
     for (const p of this.bp.parts) {
@@ -895,6 +897,23 @@ export class BuildMode {
     const mass = held.mass;
     // Wheels already on: a new one goes where it spreads them out (other side, other end), so the obvious build stands up.
     const wheels = wheelish ? this.bp.parts.filter((p) => getPart(p.def).sockets.some((sk) => sk.joint === 'axle')).map((p) => partPose(p).p) : [];
+    // The middle of the body the wheels hold up (wheels left out, so the mirror is measured from the frame).
+    const body = new THREE.Vector3();
+    {
+      let m = 0;
+      for (const p of this.bp.parts) {
+        const d = getPart(p.def);
+        if (d.sockets.some((sk) => sk.joint === 'axle')) continue;
+        body.addScaledVector(partPose(p).p, d.mass);
+        m += d.mass;
+      }
+      if (m > 0) body.divideScalar(m);
+      else body.copy(com);
+    }
+    // Which way the body is long, and how long, so a first wheel can find an end.
+    const frame = blueprintBounds({ ...this.bp, parts: this.bp.parts.filter((p) => !getPart(p.def).sockets.some((sk) => sk.joint === 'axle')) });
+    const longX = frame.max.x - frame.min.x >= frame.max.z - frame.min.z;
+    const bodyHalf = Math.max(frame.max.x - frame.min.x, frame.max.z - frame.min.z) / 2;
     // MISSION 0, still missing a handle, holding something long: the natural fit is one that sticks out to pull by.
     const one = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: held.id, p: [0, 0, 0], q: [0, 0, 0, 1] }], links: [] });
     const size = one.max.clone().sub(one.min);
@@ -922,6 +941,15 @@ export class BuildMode {
         // Where the wheels' middle would end up, compared to the middle of the machine: balanced is better.
         const mid = wheels.reduce((a, w) => a.add(w), here.clone()).divideScalar(wheels.length + 1);
         spread = Math.min(nearest, 0.6) * 10 - Math.hypot(mid.x - com.x, mid.z - com.z) * 4;
+        // Straight across from a wheel already on, the same spot at the other end, or the opposite corner:
+        // a mirrored wheel looks built on purpose and keeps it rolling straight.
+        const r = here.clone().sub(body);
+        if (wheels.some((w) => { const q = w.clone().sub(body); return [[-1, 1], [1, -1], [-1, -1]].some(([a, c]) => Math.abs(q.x - a * r.x) < 0.05 && Math.abs(q.z - c * r.z) < 0.05 && (a < 0 ? Math.abs(r.x) : Math.abs(r.z)) > 0.02); })) spread += FEEL.wheelMirror;
+      }
+      else if (wheelish) {
+        // The first wheel goes near an end of the body (a wheel in the middle of a side leaves nowhere good for the rest).
+        const along = longX ? pl.pose.p.x - body.x : pl.pose.p.z - body.z;
+        spread = Math.min(1, Math.abs(along) / Math.max(0.05, bodyHalf * 0.7)) * FEEL.wheelFirstNearEnd;
       }
       if (wantHandle) spread += reach(pl) * 8;
       const score = (pl.score ?? 0) + spread - (wheels.length ? 0 : off * mass * 0.5) - c.d / 400 - (ontoWheel ? 6 : 0) - (jointy && !wheelish ? 6 : 0);
