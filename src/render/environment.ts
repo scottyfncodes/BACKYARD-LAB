@@ -200,7 +200,20 @@ export function buildEnvironment(opts: { grassBlades: number }): Environment {
         B.box(h[0] * 2 + 0.1, 0.06, h[2] * 2 + 0.1, M.woodDark(), x, top - 0.03, z);
         for (const dx of [-1, 1]) for (const dz of [-1, 1]) B.box(0.08, top - 0.06, 0.08, M.woodDark(), x + dx * (h[0] - 0.05), (top - 0.06) / 2, z + dz * (h[2] - 0.05));
         B.box(h[0] * 2 - 0.1, 0.03, h[2] * 2 - 0.1, woodM, x, 0.2, z);
-        B.box(0.12, 0.1, 0.1, M.plastic(0x1f4fb0), x - h[0] + 0.1, top + 0.05, z + h[2] - 0.05);
+        // A bench vise on the front corner: painted body, steel jaws, the screw and its T-bar poking out past the edge.
+        {
+          const vx = x - h[0] + 0.1;
+          const vz = z + h[2] - 0.05;
+          const paint = M.plastic(0x1f4fb0);
+          B.box(0.12, 0.025, 0.1, paint, vx, top + 0.0125, vz);
+          B.box(0.11, 0.07, 0.035, paint, vx, top + 0.06, vz - 0.03);
+          B.box(0.11, 0.06, 0.03, paint, vx, top + 0.055, vz + 0.035);
+          B.box(0.1, 0.028, 0.006, M.darkMetal(), vx, top + 0.081, vz - 0.0095);
+          B.box(0.1, 0.028, 0.006, M.darkMetal(), vx, top + 0.071, vz + 0.017);
+          B.add(new THREE.CylinderGeometry(0.008, 0.008, 0.075, 10), M.metal(), V(vx, top + 0.05, vz + 0.085), new THREE.Euler(Math.PI / 2, 0, 0));
+          B.add(new THREE.CylinderGeometry(0.005, 0.005, 0.12, 8), M.metal(), V(vx, top + 0.05, vz + 0.12), new THREE.Euler(0, 0, Math.PI / 2));
+          for (const s of [-1, 1]) B.add(new THREE.SphereGeometry(0.009, 8, 6), M.metal(), V(vx + s * 0.06, top + 0.05, vz + 0.12));
+        }
         break;
       }
       case 'book': {

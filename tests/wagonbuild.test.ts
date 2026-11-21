@@ -142,6 +142,23 @@ describe('the wagon the kid built rolls like the real thing', () => {
     expect(toV(sim.wagon!.rb.translation()).x).toBeLessThan(-8);
   });
 
+  it('a wagon loaded with crates and pulled in at an angle still rolls over the lip of the garage floor', () => {
+    // The haul a player actually makes: heavy, tall things, arriving from the junk pile on a diagonal.
+    // A square-edged wagon used to jam on the 2 cm lip here and the handle slipped out of the kid's hand.
+    const sim = new Simulation({ project: PROJECT_MAP.build_wagon, wagon: false });
+    sim.addWagon(wagonBlueprint(), { pos: WORLD.wagon.pos, yaw: -90 });
+    sim.teleportPlayer([WORLD.wagon.pos[0] + 2.2, 0, WORLD.wagon.pos[2]], Math.PI / 2);
+    for (const [i, part] of ['crate', 'crate', 'lawn_wheel'].entries()) {
+      expect(sim.loadWagon(sim.spawnItem({ part, pos: [WORLD.wagon.pos[0] + 1, 0.3, WORLD.wagon.pos[2] + 0.5 + i * 0.3] })).ok).toBe(true);
+    }
+    sim.hitchWagon(true);
+    const south = { ...emptyInput(), yaw: Math.PI, moveZ: 1 };
+    const west = { ...emptyInput(), yaw: Math.PI / 2, moveZ: 1 };
+    expect(runUntil(sim, 12, () => (sim.time < 0.7 ? south : west), () => !!successOf(sim))).toBe(true);
+    expect(sim.wagon!.hitched).toBe(true);
+    expect(toV(sim.wagon!.rb.translation()).x).toBeLessThan(-8);
+  });
+
   it('walking into the wagon on the handle shoves it along; the kid never climbs onto it', () => {
     const sim = new Simulation({ project: PROJECT_MAP.build_wagon, wagon: false, junk: false });
     sim.addWagon(wagonBlueprint(), { pos: [0, 0, 0], yaw: -90 });

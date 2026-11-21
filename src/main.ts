@@ -10,6 +10,7 @@ async function boot() {
     await initPhysics();
     const game = new Game(canvas, ui);
     (window as unknown as { game: Game }).game = game;
+    Object.defineProperty(window, '__game', { get: () => game.measure(), configurable: true });
     // The loading screen already shows this note in the same spot; don't pop it in again behind the fade.
     ui.querySelector<HTMLElement>('.title-lockup')?.style.setProperty('animation', 'none');
     loading.classList.add('done');

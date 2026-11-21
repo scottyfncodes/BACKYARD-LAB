@@ -38,6 +38,7 @@ import { PhysicsBook } from './physicsbook';
 import { highlightSpeed, Replay, type Highlight } from './replay';
 import { sandboxLock, titleAction, titleContraption } from './title';
 import { completeProject, discover, findBook, keepWagon, loadSave, revealChapter, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
+import { FEEL } from '../data/feel';
 
 /** Title-screen framing: the half-built wagon by the junk pile, the broom it still needs, and where the camera drifts. */
 const TITLE_SHOT = { at: [-5.3, 1.8, 2.1] as const, broom: [-4.7, 2.5, 1.2] as const, look: [-5.45, 0.3, 2.0] as const, yaw: 0.75 };
@@ -76,7 +77,6 @@ interface ColdOpen {
 
 const BENCH_ORIGIN = new THREE.Vector3(WORLD.workbench.pos[0], WORLD.workbench.top, WORLD.workbench.pos[2]);
 /** How close the kid has to be to use the wagon (horizontal, body centre to wagon centre). */
-const WAGON_REACH = 2.6;
 const fmtTime =(t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 export class Game {
@@ -204,6 +204,8 @@ export class Game {
   /** The half-built wagon on the title screen, and the wheel that keeps getting flicked. */
   private titleHero: { id: number; spinner: number; spin: number } | null = null;
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  /** A gentle turn of the head toward something worth seeing (cancelled by any look input). */
+  private turnGoal: { yaw: number; pitch: number } | null = null;
 
   constructor(canvas: HTMLCanvasElement, ui: HTMLElement) {
     this.ui = ui;
@@ -949,6 +951,27 @@ export class Game {
 
   // ================================================================== MISSION 0: the wagon
 
+  /** The run's state in plain numbers, for automated play checks (window.__game). */
+  measure() {
+    return {
+      state: (this.mode === 'title' ? 'title' : this.succeeded ? 'over' : 'playing') as 'title' | 'playing' | 'over',
+      mode: this.mode,
+      project: this.projectId,
+      score: Object.keys(this.save.completed).length,
+      time: this.sim?.projectTime ?? 0,
+      running: this.running,
+      benchParts: this.bench.parts.length,
+      wagon: !!this.sim?.wagon,
+      wagonHitched: !!this.sim?.wagon?.hitched,
+      wagonLoad: this.sim?.wagon?.load.length ?? 0,
+    };
+  }
+
+  /** How close counts as "at the wagon": a long handle you built yourself still reaches your hand. */
+  private wagonReach(): number {
+    return Math.max(FEEL.wagonReach, (this.sim.wagon?.tow ?? 0) + FEEL.wagonReachSlack);
+  }
+
   private wagonMission(): boolean {
     return !!this.projectId && !this.sandbox && PROJECT_MAP[this.projectId].deliverable === 'wagon';
   }
@@ -976,9 +999,11 @@ export class Game {
     const at = { pos: WORLD.wagon.pos, yaw: -90 };
     this.sim.addWagon(clone(bp), at);
     this.benchCheck = null;
-    this.sim.teleportPlayer([at.pos[0] + 2.2, 0, at.pos[2]], Math.PI / 2);
+    // Stand at the end of the handle, whatever length it came out, looking down at the wagon.
+    const tow = (this.sim.wagon as Simulation['wagon'])?.tow ?? 2.2;
+    this.sim.teleportPlayer([at.pos[0] + tow + 0.15, 0, at.pos[2]], Math.PI / 2);
     this.enterExplore();
-    this.pitch = -0.25;
+    this.pitch = -0.45;
     this.audio.play('attach', new THREE.Vector3(...at.pos));
     this.fx.emit('dust', new THREE.Vector3(at.pos[0], 0.05, at.pos[2]), 16);
     this.thought.say(this.coaching() ? 'Okay. Moment of truth.' : 'Okay. Moment of truth. Does it roll? Grab the handle: PULL.', this.coaching() ? 2500 : 5500);
@@ -1229,6 +1254,7 @@ export class Game {
     this.setHudVisible(true);
     this.yaw = this.sim.yaw;
     this.pitch = 0;
+    this.turnGoal = null;
     this.cam.set('eyes', false, 0.8);
     this.driving = true;
   }
@@ -1241,6 +1267,14 @@ export class Game {
     if (fp && !this.modal.open) {
       if (this.cam.mode === 'eyes' || this.cam.mode === 'chase' || this.cam.mode === 'wide') {
         if (this.cam.mode === 'eyes') {
+          if (dx || dy) this.turnGoal = null; // the player's own look always wins
+          if (this.turnGoal) {
+            const d = Math.atan2(Math.sin(this.turnGoal.yaw - this.yaw), Math.cos(this.turnGoal.yaw - this.yaw));
+            const k = this.reducedMotion.matches ? 1 : 1 - Math.exp(-dt * FEEL.turnEase);
+            this.yaw += d * k;
+            this.pitch += (this.turnGoal.pitch - this.pitch) * k;
+            if (Math.abs(d) < 0.01) this.turnGoal = null;
+          }
           this.yaw -= dx;
           this.pitch = THREE.MathUtils.clamp(this.pitch - dy, -1.35, 1.35);
         }
@@ -1265,7 +1299,6 @@ export class Game {
     inp.rc.action = this.actionEdge;
     this.actionEdge = false;
     this.lastThrottle = inp.rc.throttle;
-    void dt;
     return inp;
   }
 
@@ -1304,7 +1337,7 @@ export class Game {
       return a;
     }
     const wagon = sim.wagon;
-    const wagonNear = !!wagon && sim.wagonDistance() < WAGON_REACH;
+    const wagonNear = !!wagon && sim.wagonDistance() < this.wagonReach();
     if (sim.carried) {
       const it = sim.carried.item;
       if (wagonNear) a.push({ id: 'load', label: `IN WAGON${k('L')}`, cls: 'primary', onPress: () => this.loadWagon(it) });
@@ -1321,6 +1354,9 @@ export class Game {
         a.push({ id: 'takeout', label: `TAKE OUT${wagon.hitched ? k('E') : ''}`, cls: wagon.hitched ? 'primary' : '', onPress: () => this.takeFromWagon() });
         a.push({ id: 'tip', label: '⤵ TIP OUT', onPress: () => this.tipWagon() });
       }
+    } else if (!look && wagon && wagonNear && !wagon.hitched) {
+      // Standing at the handle is enough: nobody should have to line the crosshair up on it.
+      a.push({ id: 'hitch', label: `PULL${k('P')}`, cls: 'primary', onPress: () => this.toggleHitch() });
     } else if (look?.kind === 'machine' && look.machine.state === 'frozen' && look.machine.id !== this.testMachine) {
       a.push({ id: 'pickm', label: `PICK UP MACHINE${k('E')}`, cls: 'primary', onPress: () => this.pickUpMachine(look.machine) });
     } else if (look?.kind === 'static' && look.id === 'physics_book') {
@@ -1446,7 +1482,7 @@ export class Game {
       this.sim.hitchWagon(false);
       return;
     }
-    if (this.sim.wagonDistance() > WAGON_REACH) {
+    if (this.sim.wagonDistance() > this.wagonReach()) {
       this.toasts.show('Too far from the wagon', 'bad');
       return;
     }
@@ -1458,6 +1494,8 @@ export class Game {
       this.audio.play('discover');
       this.fx.emit('confetti', toV(w.rb.translation()).add(new THREE.Vector3(0, 0.6, 0)), 30);
       this.thought.say(this.coaching() ? 'IT ROLLS. I built that!' : 'IT ROLLS. I built that. Now: load 3 things from the junk pile and haul them into the lab.', this.coaching() ? 3000 : 6000);
+      // Show them where the junk pile is: turn round toward it, the wagon trailing behind.
+      this.lookToward(WORLD.junkPile);
       return;
     }
     if (this.save.settings.hints && !this.wagonHinted) {
@@ -1620,6 +1658,13 @@ export class Game {
     this.yaw = this.sim.yaw;
     this.pitch = -0.25;
     this.audio.play('whoosh');
+  }
+
+  /** Ease the kid's view round to face a point. */
+  private lookToward(at: readonly [number, number, number]) {
+    const p = this.sim.player?.translation();
+    if (!p) return;
+    this.turnGoal = { yaw: Math.atan2(-(at[0] - p.x), -(at[2] - p.z)), pitch: FEEL.lookPitch };
   }
 
   private distTo(v: [number, number, number]) {
