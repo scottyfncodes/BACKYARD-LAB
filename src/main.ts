@@ -10,6 +10,7 @@ async function boot() {
     await initPhysics();
     const game = new Game(canvas, ui);
     (window as unknown as { game: Game }).game = game;
+    Object.defineProperty(window, '__game', { get: () => game.measure(), configurable: true });
     loading.classList.add('done');
     setTimeout(() => loading.remove(), 600);
   } catch (e) {

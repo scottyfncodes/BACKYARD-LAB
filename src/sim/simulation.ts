@@ -10,6 +10,7 @@ import { criticalDamping, stableStiffness } from './links';
 import { MachineInstance, type DynTarget, type MachineHost, type MachinePlacement, type RCInput } from './machine';
 import { ObjectiveTracker, outOfBounds, type ObjectiveEvent, type WorldQuery } from './objectives';
 import { DT, G_CARRIED, G_DYNAMIC, G_PLAYER, groups, GROUP, Physics, RAPIER, toQ, toV, type Collider, type Owner, type RigidBody } from './physics';
+import { FEEL } from '../data/feel';
 
 export interface Item {
   id: number;
@@ -519,7 +520,7 @@ export class Simulation implements MachineHost {
     const [hx, hy, hz] = half;
     const mass = bp ? Math.max(WAGON.mass, bp.parts.reduce((m, p) => m + getPart(p.def).mass, 0)) : WAGON.mass;
     // Rounded edges ride up kerbs, lips and door sills from any angle, the way its wheels would.
-    const round = Math.min(0.05, hy * 0.5, hx * 0.5, hz * 0.5);
+    const round = Math.min(FEEL.wagonEdgeRadius, hy * 0.5, hx * 0.5, hz * 0.5);
     const cd = RAPIER.ColliderDesc.roundCuboid(hx - round, hy - round, hz - round, round).setTranslation(0, hy, 0).setMass(mass).setFriction(0.5).setRestitution(0.05).setCollisionGroups(G_DYNAMIC);
     const collider = this.physics.world.createCollider(cd, rb);
     this.physics.tags.set(collider.handle, { owner: { kind: 'wagon' }, mat: bp ? 'wood' : 'metal' });

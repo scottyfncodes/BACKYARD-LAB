@@ -26,12 +26,12 @@ import { RunJournal } from './journal';
 import { PhysicsBook } from './physicsbook';
 import { Replay } from './replay';
 import { completeProject, discover, findBook, keepWagon, loadSave, revealChapter, revealHint, sandboxParts, totalBonuses, writeSave, type SaveData, type TestSpot } from './save';
+import { FEEL } from '../data/feel';
 
 type Mode = 'title' | 'intro' | 'explore' | 'build' | 'carry' | 'replay';
 
 const BENCH_ORIGIN = new THREE.Vector3(WORLD.workbench.pos[0], WORLD.workbench.top, WORLD.workbench.pos[2]);
 /** How close the kid has to be to use the wagon (horizontal, body centre to wagon centre). */
-const WAGON_REACH = 2.6;
 const fmtTime =(t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 export class Game {
@@ -696,7 +696,7 @@ export class Game {
     const kid = this.sim.player?.translation();
     if (p && kid) {
       this.yaw = Math.atan2(-(p.focus[0] - kid.x), -(p.focus[2] - kid.z));
-      this.pitch = -0.08;
+      this.pitch = FEEL.lookPitch;
     }
     if (this.save.settings.hints && p && !this.save.completed[p.id]) {
       // Thinking out loud: a chain of "what ifs", then where the parts are.
@@ -749,6 +749,23 @@ export class Game {
 
   // ================================================================== MISSION 0: the wagon
 
+  /** The run's state in plain numbers, for automated play checks (window.__game). */
+  measure() {
+    const mode = this.mode === 'title' ? 'title' : this.succeeded ? 'over' : 'playing';
+    return {
+      state: mode as 'title' | 'playing' | 'over',
+      mode: this.mode,
+      project: this.projectId,
+      score: Object.keys(this.save.completed).length,
+      time: this.sim?.projectTime ?? 0,
+      running: this.running,
+      benchParts: this.bench.parts.length,
+      wagon: !!this.sim?.wagon,
+      wagonHitched: !!this.sim?.wagon?.hitched,
+      wagonLoad: this.sim?.wagon?.load.length ?? 0,
+    };
+  }
+
   /** How many things this project wants hauled in the wagon, if any. */
   private wagonGoal(): number {
     const p = this.projectId && !this.sandbox ? PROJECT_MAP[this.projectId] : null;
@@ -760,7 +777,7 @@ export class Game {
 
   /** How close counts as "at the wagon": a long handle you built yourself still reaches your hand. */
   private wagonReach(): number {
-    return Math.max(WAGON_REACH, (this.sim.wagon?.tow ?? 0) + 0.8);
+    return Math.max(FEEL.wagonReach, (this.sim.wagon?.tow ?? 0) + FEEL.wagonReachSlack);
   }
 
   private wagonMission(): boolean {
@@ -824,7 +841,7 @@ export class Game {
           if (dx || dy) this.turnGoal = null; // the player's own look always wins
           if (this.turnGoal) {
             const d = Math.atan2(Math.sin(this.turnGoal.yaw - this.yaw), Math.cos(this.turnGoal.yaw - this.yaw));
-            const k = this.calm ? 1 : 1 - Math.exp(-dt * 3.5);
+            const k = this.calm ? 1 : 1 - Math.exp(-dt * FEEL.turnEase);
             this.yaw += d * k;
             this.pitch += (this.turnGoal.pitch - this.pitch) * k;
             if (Math.abs(d) < 0.01) this.turnGoal = null;
@@ -1208,7 +1225,7 @@ export class Game {
   private lookToward(at: readonly [number, number, number]) {
     const p = this.sim.player?.translation();
     if (!p) return;
-    this.turnGoal = { yaw: Math.atan2(-(at[0] - p.x), -(at[2] - p.z)), pitch: -0.12 };
+    this.turnGoal = { yaw: Math.atan2(-(at[0] - p.x), -(at[2] - p.z)), pitch: FEEL.lookPitch };
   }
 
   private distTo(v: [number, number, number]) {

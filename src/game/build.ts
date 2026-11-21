@@ -30,6 +30,7 @@ import { generateStuds, rankInDirection, type Stud } from './studs';
 import type { Idea } from '../data/ideas';
 import { transformPoint } from '../sim/geom';
 import type { WagonNote } from '../sim/wagonbuild';
+import { FEEL } from '../data/feel';
 
 export interface Stash {
   infinite: boolean;
@@ -774,9 +775,10 @@ export class BuildMode {
     const b = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def, p: [pose.p.x, pose.p.y, pose.p.z], q: [pose.q.x, pose.q.y, pose.q.z, pose.q.w] }], links: [] });
     let reach = 0;
     for (const x of [b.min.x, b.max.x]) for (const z of [b.min.z, b.max.z]) reach = Math.max(reach, Math.hypot(x - h.centre.x, z - h.centre.z));
-    const out = Math.min(0.8, Math.max(0, reach - h.radius));
+    const out = Math.max(0, reach - h.radius);
     // Sticking out to pull by, and not so steep that it digs in below the wheels.
-    return out * 12 - (b.min.y < h.wheelBottom - 0.05 ? 4 : 0);
+    const A = FEEL.handleAim;
+    return Math.min(A.maxOut, out) * A.perMetreOut + (b.min.y < h.wheelBottom - 0.05 ? A.belowWheels : 0);
   }
 
   /**
@@ -785,15 +787,16 @@ export class BuildMode {
    * never on top of another wheel.
    */
   private wheelScore(p: THREE.Vector3, axle: THREE.Vector3, wheels: { p: THREE.Vector3; axle: THREE.Vector3 }[], centre: THREE.Vector3): number {
-    if (Math.abs(axle.y) > 0.5) return -8; // lying flat: doesn't roll
+    const A = FEEL.wheelAim;
+    if (Math.abs(axle.y) > 0.5) return A.lyingFlat; // lying flat: doesn't roll
     const side = (wheels[0]?.axle ?? axle).clone().setY(0).normalize();
     const fwd = new THREE.Vector3(-side.z, 0, side.x);
     const rel = p.clone().sub(centre);
     const s = rel.dot(side);
     const t = rel.dot(fwd);
     let score = 0;
-    if (!wheels.length) return Math.min(1, Math.abs(t) / 0.3) * 3; // the first one near a corner
-    score += Math.abs(axle.dot(side)) * 3; // axles in line, so it rolls straight
+    if (!wheels.length) return Math.min(1, Math.abs(t) / 0.3) * A.firstNearCorner; // the first one near a corner
+    score += Math.abs(axle.dot(side)) * A.axlesInLine; // axles in line, so it rolls straight
     const count = (f: (r: THREE.Vector3) => number, sign: number) => wheels.filter((w) => Math.sign(f(w.p.clone().sub(centre))) === sign).length;
     const balance = (v: number, f: (r: THREE.Vector3) => number, weight: number, dead: number) => {
       if (Math.abs(v) < dead) return -weight * 0.5;
@@ -801,11 +804,11 @@ export class BuildMode {
       const theirs = count(f, -Math.sign(v));
       return mine < theirs ? weight : mine > theirs ? -weight : 0;
     };
-    score += balance(s, (r) => r.dot(side), 4, 0.03);
-    score += balance(t, (r) => r.dot(fwd), 3, 0.06);
+    score += balance(s, (r) => r.dot(side), A.sideBalance, 0.03);
+    score += balance(t, (r) => r.dot(fwd), A.endBalance, 0.06);
     const nearest = Math.min(...wheels.map((w) => w.p.distanceTo(p)));
-    if (nearest < 0.15) score -= 10;
-    score += Math.min(nearest, 0.6) * 2;
+    if (nearest < 0.15) score += A.stacked;
+    score += Math.min(nearest, 0.6) * A.spreadPerMetre;
     // A wheel that mirrors one already on (straight across, the same spot at the other end, or the opposite corner) looks
     // built on purpose, and keeps it rolling straight.
     const mirrors = wheels.some((w) => {
@@ -815,7 +818,7 @@ export class BuildMode {
       const near = (a: number, b: number) => Math.abs(a - b) < 0.05;
       return (near(ws, -s) && near(wt, t)) || (near(ws, s) && near(wt, -t)) || (near(ws, -s) && near(wt, -t));
     });
-    if (mirrors) score += 2.5;
+    if (mirrors) score += A.mirror;
     return score;
   }
 
