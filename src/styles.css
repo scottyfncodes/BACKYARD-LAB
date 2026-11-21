@@ -30,7 +30,7 @@ html, body {
   -webkit-touch-callout: none;
 }
 
-#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
 
 #ui { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
 #ui > * { pointer-events: auto; }
@@ -123,7 +123,7 @@ html, body {
 .prompt .traits { margin-top: 4px; }
 .trait {
   display: inline-block;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   background: rgba(255, 246, 227, 0.92);
   color: var(--ink);
@@ -358,7 +358,7 @@ html, body {
   touch-action: none; /* the game decides: tap, drag out, or scroll the tray */
 }
 .slot img { width: 70px; height: 70px; object-fit: contain; pointer-events: none; }
-.slot .name { font-size: 11px; font-weight: 900; text-align: center; line-height: 1.05; pointer-events: none; }
+.slot .name { font-size: 12px; font-weight: 900; text-align: center; line-height: 1.05; pointer-events: none; }
 .slot .count {
   position: absolute;
   top: -8px;
@@ -511,7 +511,7 @@ body.building .thought::after { display: none; }
   .place-bar .btn.go { min-height: 48px; font-size: 16px; }
 }
 .dpad .btn.rot { display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; font-size: 20px; }
-.dpad .btn.rot small { font-size: 9px; font-weight: 900; letter-spacing: 0.04em; margin-top: 2px; opacity: 0.75; }
+.dpad .btn.rot small { font-size: 11px; font-weight: 900; letter-spacing: 0.04em; margin-top: 2px; opacity: 0.75; }
 
 /* ---------------------------------------------------------------- ideas / guided build */
 .idea-card {
@@ -653,7 +653,7 @@ body.building .build-ui.guiding ~ .thought, body.building .thought { z-index: 1;
   scrollbar-width: none;
 }
 .bin-strip::-webkit-scrollbar { display: none; }
-.bin-part { flex: 0 0 auto; width: 64px; text-align: center; font-size: 10px; font-weight: 900; line-height: 1.05; }
+.bin-part { flex: 0 0 auto; width: 72px; text-align: center; font-size: 12px; font-weight: 900; line-height: 1.05; }
 .bin-part img { width: 52px; height: 52px; object-fit: contain; display: block; margin: 0 auto 2px; background: #fff; border: 2px solid var(--ink); border-radius: 10px; }
 .card p.loop { font-size: 14px; opacity: 0.8; margin-top: 12px; }
 .project-chip { cursor: pointer; }
@@ -690,11 +690,11 @@ body.building .build-ui.guiding ~ .thought, body.building .thought { z-index: 1;
 @keyframes slide-up { from { transform: translate(-50%, 40px) rotate(-0.6deg); opacity: 0; } }
 .results-head { display: flex; justify-content: space-between; align-items: center; font-weight: 900; letter-spacing: 0.08em; font-size: 14px; }
 .results-head .btn.close { min-height: 36px; min-width: 36px; padding: 0; font-size: 14px; }
-.results .label { font-weight: 900; font-size: 11px; letter-spacing: 0.1em; opacity: 0.7; margin: 8px 0 0; }
+.results .label { font-weight: 900; font-size: 12px; letter-spacing: 0.1em; opacity: 0.7; margin: 8px 0 0; }
 .gauges { display: grid; gap: 4px; margin-top: 6px; }
 .gauge { display: grid; grid-template-columns: 72px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; }
 .gauge b { font-size: 14px; grid-row: 1 / span 2; }
-.gauge small { font-size: 11px; font-weight: 800; opacity: 0.7; }
+.gauge small { font-size: 12px; font-weight: 800; opacity: 0.7; }
 .gauge-bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; height: 14px; }
 .gauge-bar i { border: 2px solid var(--ink); border-radius: 3px; background: #fff; }
 .gauge-bar.high i.on { background: var(--green); }
@@ -746,7 +746,7 @@ body.has-results .actions.right, body.has-results .thought { display: none !impo
   body:not(.building) .thought { left: calc(12px + var(--safe-l)); transform: rotate(-1deg); max-width: 44vw; bottom: calc(16px + var(--safe-b)); }
 }
 .stage-ideas { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.stage-ideas .concept { font-size: 10px; padding: 2px 8px; }
+.stage-ideas .concept { font-size: 12px; padding: 2px 8px; }
 .stage.locked .stage-ideas .concept { background: #8a7a66; }
 
 /* ================================================================ Mission 0: wagon notes on the bench */
@@ -763,7 +763,7 @@ body.has-results .actions.right, body.has-results .thought { display: none !impo
   transform: rotate(-0.8deg);
   z-index: 1;
 }
-.wagon-notes .wn-head { font-size: 11px; font-weight: 900; letter-spacing: 0.08em; opacity: 0.7; margin-bottom: 2px; }
+.wagon-notes .wn-head { font-size: 12px; font-weight: 900; letter-spacing: 0.08em; opacity: 0.7; margin-bottom: 2px; }
 .wagon-notes .wn { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; font-weight: 800; line-height: 1.2; margin: 3px 0; }
 .wagon-notes .wn i { font-style: normal; flex: 0 0 18px; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--ink); background: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
 .wagon-notes .wn.done i { background: var(--green); color: #fff; }
@@ -867,4 +867,9 @@ body.noting .toasts { top: calc(218px + var(--safe-t)); }
   .book-title { font-size: 30px; }
   .card h2.book-h { font-size: 24px; }
   .card p.book-idea { font-size: 15px; }
+}
+
+/* Calm the interface for people who ask for less motion (the 3D world keeps its physics). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }

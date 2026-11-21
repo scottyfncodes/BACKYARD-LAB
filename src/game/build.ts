@@ -351,9 +351,11 @@ export class BuildMode {
     const show = !this.testing && !this.holding && this.bp.parts.length > 0;
     this.goBox.classList.toggle('hidden', !show);
     if (!show) return;
+    // Rolling the wagon out IS its test: the bench-top run and the place-it-yourself carry only
+    // get in the way (and cover the wheels) on the very first build.
+    const wagon = this.host.notes(this.bp) !== null;
     const b: HTMLElement[] = [
-      btn('⚙ Try it here', () => this.test(), 'small'),
-      btn('📍 Place it myself', () => this.done(), 'small'),
+      ...(wagon ? [] : [btn('⚙ Try it here', () => this.test(), 'small'), btn('📍 Place it myself', () => this.done(), 'small')]),
       btn(this.host.goLabel, () => this.testOut(), 'go test-btn'),
     ];
     this.goBox.replaceChildren(...b);
@@ -688,12 +690,13 @@ export class BuildMode {
       const ax = size.x >= size.y && size.x >= size.z ? new THREE.Vector3(1, 0, 0) : size.z >= size.y ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
       return { dir: ax.applyQuaternion(q), long: Math.max(size.x, size.y, size.z) / Math.max(1e-3, Math.min(size.x, size.y, size.z)) };
     };
+    const handle = this.handleIntent(def);
     const sockets = def.sockets.length ? def.sockets : [undefined];
     for (const sk of sockets) {
       for (const spin of [0, 90, 180, 270]) {
         const pl = this.placeWith(st, sk?.id, spin, 0);
         if (!pl.valid) continue;
-        let score = 0;
+        let score = handle ? this.handleScore(handle, def.id, pl.pose) : 0;
         const n = st.normal;
         const sideFace = Math.abs(n.y) < 0.5;
         if (pl.conn && pl.conn.kind !== 'weld') score += 5; // real joints are what special spots are for
@@ -722,6 +725,98 @@ export class BuildMode {
     (best.pl as Placement & { auto?: { socket?: string; spin: number }; score?: number }).auto = { socket: best.socket, spin: best.spin };
     (best.pl as Placement & { score?: number }).score = best.score;
     return best.pl;
+  }
+
+  /** Wheels already on the machine: where they are and which way their axles point. */
+  private wheelsOnMachine(): { p: THREE.Vector3; axle: THREE.Vector3 }[] {
+    const out: { p: THREE.Vector3; axle: THREE.Vector3 }[] = [];
+    for (const part of this.bp.parts) {
+      const sk = getPart(part.def).sockets.find((s) => s.joint === 'axle');
+      if (!sk) continue;
+      const pose = partPose(part);
+      out.push({ p: pose.p.clone(), axle: v3(sk.normal).applyQuaternion(pose.q).normalize() });
+    }
+    return out;
+  }
+
+  /** Centre of mass of everything that isn't a wheel (the body the wheels hold up). */
+  private bodyCentre(): THREE.Vector3 {
+    const com = new THREE.Vector3();
+    let total = 0;
+    for (const p of this.bp.parts) {
+      const d = getPart(p.def);
+      if (d.sockets.some((s) => s.joint === 'axle')) continue;
+      com.addScaledVector(partPose(p).p, d.mass);
+      total += d.mass;
+    }
+    return total > 0 ? com.divideScalar(total) : com;
+  }
+
+  /**
+   * A long thing going onto something that already rolls is almost always its
+   * handle: it should stick out past the body, not lie along the top.
+   */
+  private handleIntent(def: PartDef): { centre: THREE.Vector3; radius: number; wheelBottom: number } | null {
+    if (def.link || def.sockets.some((s) => s.joint === 'axle')) return null;
+    const b = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def: def.id, p: [0, 0, 0], q: [0, 0, 0, 1] }], links: [] });
+    const size = b.max.clone().sub(b.min);
+    const dims = [size.x, size.y, size.z].sort((a, c) => a - c);
+    if (dims[2] < 0.8 || dims[2] / Math.max(1e-3, dims[1]) < 4) return null;
+    const wheels = this.wheelsOnMachine();
+    if (wheels.length < 2) return null;
+    const centre = this.bodyCentre();
+    const mb = blueprintBounds(this.bp);
+    const radius = Math.max(...[mb.min, mb.max].flatMap((a) => [mb.min, mb.max].map((c) => Math.hypot(a.x - centre.x, c.z - centre.z))));
+    return { centre, radius, wheelBottom: mb.min.y };
+  }
+
+  private handleScore(h: { centre: THREE.Vector3; radius: number; wheelBottom: number }, def: string, pose: { p: THREE.Vector3; q: THREE.Quaternion }): number {
+    const b = blueprintBounds({ ...this.bp, parts: [{ uid: -1, def, p: [pose.p.x, pose.p.y, pose.p.z], q: [pose.q.x, pose.q.y, pose.q.z, pose.q.w] }], links: [] });
+    let reach = 0;
+    for (const x of [b.min.x, b.max.x]) for (const z of [b.min.z, b.max.z]) reach = Math.max(reach, Math.hypot(x - h.centre.x, z - h.centre.z));
+    const out = Math.min(0.8, Math.max(0, reach - h.radius));
+    // Sticking out to pull by, and not so steep that it digs in below the wheels.
+    return out * 12 - (b.min.y < h.wheelBottom - 0.05 ? 4 : 0);
+  }
+
+  /**
+   * Where a wheel should go next so the obvious build stands up: on the side
+   * and end that has fewer wheels, axles lined up with the wheels already on,
+   * never on top of another wheel.
+   */
+  private wheelScore(p: THREE.Vector3, axle: THREE.Vector3, wheels: { p: THREE.Vector3; axle: THREE.Vector3 }[], centre: THREE.Vector3): number {
+    if (Math.abs(axle.y) > 0.5) return -8; // lying flat: doesn't roll
+    const side = (wheels[0]?.axle ?? axle).clone().setY(0).normalize();
+    const fwd = new THREE.Vector3(-side.z, 0, side.x);
+    const rel = p.clone().sub(centre);
+    const s = rel.dot(side);
+    const t = rel.dot(fwd);
+    let score = 0;
+    if (!wheels.length) return Math.min(1, Math.abs(t) / 0.3) * 3; // the first one near a corner
+    score += Math.abs(axle.dot(side)) * 3; // axles in line, so it rolls straight
+    const count = (f: (r: THREE.Vector3) => number, sign: number) => wheels.filter((w) => Math.sign(f(w.p.clone().sub(centre))) === sign).length;
+    const balance = (v: number, f: (r: THREE.Vector3) => number, weight: number, dead: number) => {
+      if (Math.abs(v) < dead) return -weight * 0.5;
+      const mine = count(f, Math.sign(v));
+      const theirs = count(f, -Math.sign(v));
+      return mine < theirs ? weight : mine > theirs ? -weight : 0;
+    };
+    score += balance(s, (r) => r.dot(side), 4, 0.03);
+    score += balance(t, (r) => r.dot(fwd), 3, 0.06);
+    const nearest = Math.min(...wheels.map((w) => w.p.distanceTo(p)));
+    if (nearest < 0.15) score -= 10;
+    score += Math.min(nearest, 0.6) * 2;
+    // A wheel that mirrors one already on (straight across, the same spot at the other end, or the opposite corner) looks
+    // built on purpose, and keeps it rolling straight.
+    const mirrors = wheels.some((w) => {
+      const r = w.p.clone().sub(centre);
+      const ws = r.dot(side);
+      const wt = r.dot(fwd);
+      const near = (a: number, b: number) => Math.abs(a - b) < 0.05;
+      return (near(ws, -s) && near(wt, t)) || (near(ws, s) && near(wt, -t)) || (near(ws, -s) && near(wt, -t));
+    });
+    if (mirrors) score += 2.5;
+    return score;
   }
 
   private placementFor(i: number): Placement | null {
@@ -809,11 +904,18 @@ export class BuildMode {
    */
   private bestMachineStud(start: { x: number; y: number }): boolean {
     if (getPart(this.holding!.def).link) return this.snapNear(start.x, start.y, Infinity, true);
-    const cands = this.visibleStuds()
+    const held = getPart(this.holding!.def);
+    // Only wheels go looking for shafts and axles by default; anything else can still be dragged onto one.
+    const wheelish = held.sockets.some((sk) => sk.joint === 'axle');
+    // Wheels and handles care about the whole machine, including its far side: the
+    // obvious build (tap a wheel, tap PLACE, four times) has to come out balanced.
+    const wholeMachine = wheelish || !!this.handleIntent(held);
+    const cands = (wholeMachine ? this.studs.map((st, i) => ({ i, ...this.toScreen(st.point) })) : this.visibleStuds())
       .filter((c) => this.studs[c.i].part !== null)
       .map((c) => ({ i: c.i, d: Math.hypot(c.x - start.x, c.y - start.y) }))
       .sort((a, b) => a.d - b.d);
-    const pool = [...cands.filter((c) => this.studs[c.i].special), ...cands.filter((c) => !this.studs[c.i].special).slice(0, 36)];
+    const plain = cands.filter((c) => !this.studs[c.i].special);
+    const pool = [...cands.filter((c) => this.studs[c.i].special), ...(wholeMachine ? plain.filter((c) => (wheelish ? Math.abs(this.studs[c.i].normal.y) < 0.5 : true)).slice(0, 160) : plain.slice(0, 36))];
     const com = new THREE.Vector3();
     let total = 0;
     for (const p of this.bp.parts) {
@@ -822,10 +924,10 @@ export class BuildMode {
       total += m;
     }
     if (total > 0) com.divideScalar(total);
-    const held = getPart(this.holding!.def);
     const mass = held.mass;
-    // Only wheels go looking for shafts and axles by default; anything else can still be dragged onto one.
-    const wheelish = held.sockets.some((sk) => sk.joint === 'axle');
+    const wheels = wheelish ? this.wheelsOnMachine() : [];
+    const body = wheelish ? this.bodyCentre() : com;
+    const hub = held.sockets.find((sk) => sk.joint === 'axle');
     let best: { i: number; score: number } | null = null;
     for (const c of pool) {
       const pl = this.placementFor(c.i) as (Placement & { score?: number }) | null;
@@ -835,7 +937,8 @@ export class BuildMode {
       const onto = this.studs[c.i].part !== null ? findPart(this.bp, this.studs[c.i].part!) : null;
       const ontoWheel = !!onto && getPart(onto.def).sockets.some((sk) => sk.joint === 'axle');
       const jointy = !!pl.conn && pl.conn.kind !== 'weld' && pl.conn.kind !== 'tether';
-      const score = (pl.score ?? 0) - off * mass * 0.5 - c.d / 400 - (ontoWheel ? 6 : 0) - (jointy && !wheelish ? 6 : 0);
+      let score = (pl.score ?? 0) - off * mass * 0.5 - c.d / 400 - (ontoWheel ? 6 : 0) - (jointy && !wheelish ? 6 : 0);
+      if (wheelish && hub) score += this.wheelScore(pl.pose.p, v3(hub.normal).applyQuaternion(pl.pose.q).normalize(), wheels, body);
       if (!best || score > best.score) best = { i: c.i, score };
     }
     if (!best) return false;
